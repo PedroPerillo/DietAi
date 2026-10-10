@@ -67,16 +67,44 @@ test('very high targets are either reached or flagged, never silently short', as
   else assert.equal(r.warning, null);
 });
 
-test('an AI plan that repeats a dish within a day falls back with a clear note', async () => {
-  const choices = aiChoices(body).map((d) => ({ ...d, dinner: d.lunch }));
-  const quiet = console.error;
-  console.error = () => {};
+test('a dish the AI repeats within a day is re-planned; the rest of its picks are kept', async () => {
+  const week = { ...body, days: 7 };
+  const choices = aiChoices(week);
+  choices[4] = { ...choices[4], dinner: choices[4].lunch }; // day 5 repeats lunch at dinner
+  const quiet = console.info;
+  console.info = () => {};
   try {
-    const r = await generatePlan(body, { useAi: true, planner: async () => ({ choices, summary: '' }) });
-    assert.equal(r.source, 'built-in');
-    assert.match(r.warning, /repeated a dish/);
+    const r = await generatePlan(week, { useAi: true, planner: async () => ({ choices, summary: 'AI week.' }) });
+    assert.equal(r.source, 'ai');
+    assert.equal(r.warning, null);
+    r.plan.days.forEach((d, i) => {
+      const ids = d.meals.map((m) => m.recipeId);
+      assert.equal(new Set(ids).size, ids.length, `day ${i + 1} has no repeat`);
+      for (const m of d.meals) if (!(i === 4 && m.slot === 'dinner')) assert.equal(m.recipeId, choices[i][m.slot], `day ${i + 1} ${m.slot} kept`);
+    });
+    assert.notEqual(r.plan.days[4].meals.find((m) => m.slot === 'dinner').recipeId, choices[4].lunch);
   } finally {
-    console.error = quiet;
+    console.info = quiet;
+  }
+});
+
+test('a day whose AI picks miss the calorie band is planned by the engine instead', async () => {
+  const big = { sex: 'male', age: 22, heightCm: 190, weightKg: 95, activity: 'active', goal: 'gain', diet: 'omnivore', days: 7 };
+  // Realistic picks (what the engine itself would choose), except day 5: the lightest
+  // listed dishes, which can't reach ~3,800 kcal even at the largest portions.
+  const { plan } = await generatePlan(big, { useAi: false });
+  const choices = plan.days.map((d) => Object.fromEntries(d.meals.map((m) => [m.slot, m.recipeId])));
+  choices[4] = { breakfast: 'cottage-berries', lunch: 'egg-sandwich', dinner: 'tuna-bean-salad', snack: 'yogurt-parfait' };
+  const quiet = console.info;
+  console.info = () => {};
+  try {
+    const r = await generatePlan(big, { useAi: true, planner: async () => ({ choices, summary: '' }) });
+    assert.equal(r.source, 'ai');
+    assert.deepEqual(validatePlan(r.plan, r.profile, r.plan.targets), []);
+    assert.notDeepEqual(Object.fromEntries(r.plan.days[4].meals.map((m) => [m.slot, m.recipeId])), choices[4]);
+    assert.equal(r.plan.days[0].meals.find((m) => m.slot === 'lunch').recipeId, choices[0].lunch, 'other days keep the AI picks');
+  } finally {
+    console.info = quiet;
   }
 });
 
@@ -118,12 +146,46 @@ test('falls back to the built-in planner when the AI fails, and says so', async 
   }
 });
 
-test('AI picks that break a safety rule are replaced by the built-in plan', async () => {
+test('unusable AI picks are filled by the engine; the rest of the AI plan is kept', async () => {
+  const week = { ...body, days: 7 };
+  const choices = aiChoices(week);
+  choices[1] = { ...choices[1], dinner: 'pizza' }; // unknown recipe
+  choices[2] = { ...choices[2], snack: 'tuna-wrap' }; // a lunch recipe in the snack slot
+  const quiet = console.info;
+  console.info = () => {};
+  try {
+    const r = await generatePlan(week, { useAi: true, planner: async () => ({ choices, summary: 'AI week.' }) });
+    assert.equal(r.source, 'ai');
+    assert.equal(r.summary, 'AI week.');
+    assert.notEqual(r.plan.days[1].meals.find((m) => m.slot === 'dinner').recipeId, 'pizza');
+    assert.notEqual(r.plan.days[2].meals.find((m) => m.slot === 'snack').recipeId, 'tuna-wrap');
+    assert.equal(r.plan.days[0].meals.find((m) => m.slot === 'lunch').recipeId, choices[0].lunch);
+    assert.deepEqual(validatePlan(r.plan, r.profile, r.plan.targets), []);
+  } finally {
+    console.info = quiet;
+  }
+});
+
+test('a plan where most AI picks were unusable is labelled built-in, without the AI summary', async () => {
+  const week = { ...body, days: 7 };
+  const choices = aiChoices(week).map((d, i) => (i < 5 ? Object.fromEntries(Object.keys(d).map((slot) => [slot, 'pizza'])) : d));
+  const quiet = [console.info, console.error];
+  console.info = console.error = () => {};
+  try {
+    const r = await generatePlan(week, { useAi: true, planner: async () => ({ choices, summary: 'Pizza week!' }) });
+    assert.equal(r.source, 'built-in');
+    assert.equal(r.summary, '');
+    assert.match(r.warning, /didn't fit your week/);
+  } finally {
+    [console.info, console.error] = quiet;
+  }
+});
+
+test('AI picks that break the diet or an allergy are replaced by the built-in plan', async () => {
   const good = aiChoices(body);
   const cases = [
     good.map((d) => ({ ...d, lunch: 'turkey-chili' })), // pescatarian user: turkey violates
     good.map((d) => ({ ...d, snack: 'shrimp-tacos' })), // shellfish allergy, and not a snack
-    good.map((d) => ({ ...d, dinner: 'pizza' })), // unknown recipe
   ];
   const quiet = console.error;
   console.error = () => {};

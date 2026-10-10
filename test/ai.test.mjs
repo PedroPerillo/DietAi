@@ -5,6 +5,7 @@ import http from 'node:http';
 // Point the planner at a local fake Groq so we exercise request construction + parsing.
 const HANG = Symbol('hang');
 let srv, lastRequest, reply, onUpstreamRequest, onUpstreamClose;
+let requests = 0;
 before(async () => {
   srv = http.createServer(async (req, res) => {
     let raw = '';
@@ -15,7 +16,8 @@ before(async () => {
       res.on('close', () => onUpstreamClose?.());
       return onUpstreamRequest?.();
     }
-    if (r.status) return res.writeHead(r.status, { 'Content-Type': 'application/json' }).end(JSON.stringify(r.body ?? {}));
+    requests += 1;
+    if (r.status) return res.writeHead(r.status, { 'Content-Type': 'application/json', ...r.headers }).end(JSON.stringify(r.body ?? {}));
     res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(r));
   }).listen(0);
   await new Promise((r) => srv.once('listening', r));
@@ -92,6 +94,47 @@ test('rejects refusals, truncation, malformed JSON and API errors', async () => 
     }
   } finally {
     console.error = quiet;
+  }
+});
+
+test('waits out a short rate limit once, but not a long one', async () => {
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    let n = 0;
+    reply = () => (n++ === 0 ? { status: 429, headers: { 'retry-after': '0.05' }, body: {} } : message(JSON.stringify({ summary: 'ok', days: { d0: day } })));
+    requests = 0;
+    const r = await aiSkeleton(profile, targets);
+    assert.equal(requests, 2);
+    assert.deepEqual(r.choices[0], day);
+
+    reply = () => ({ status: 429, headers: { 'retry-after': '60' }, body: {} });
+    requests = 0;
+    await assert.rejects(aiSkeleton(profile, targets), (e) => /busy/.test(e.userMessage));
+    assert.equal(requests, 1, 'a long wait is not worth it; the built-in plan is used');
+  } finally {
+    console.error = quiet;
+  }
+});
+
+test('DeepSeek gets JSON mode with the schema in the prompt, and no strict-mode parameters', async () => {
+  process.env.DEEPSEEK_API_KEY = 'ds-key';
+  process.env.DEEPSEEK_BASE_URL = process.env.GROQ_BASE_URL;
+  try {
+    reply = () => message(JSON.stringify({ summary: 'ok', days: { d0: day } }));
+    const r = await aiSkeleton(profile, targets);
+    assert.deepEqual(r.choices[0], day);
+    const b = lastRequest.body;
+    assert.equal(lastRequest.headers.authorization, 'Bearer ds-key');
+    assert.equal(b.model, 'deepseek-chat');
+    assert.deepEqual(b.response_format, { type: 'json_object' });
+    assert.equal(b.max_tokens, 4096);
+    for (const k of ['reasoning_effort', 'include_reasoning', 'max_completion_tokens']) assert.equal(b[k], undefined, k);
+    assert.match(b.messages[0].content, /JSON schema exactly/);
+    assert.match(b.messages[0].content, new RegExp(day.breakfast ?? Object.values(day)[0]));
+  } finally {
+    delete process.env.DEEPSEEK_API_KEY;
+    delete process.env.DEEPSEEK_BASE_URL;
   }
 });
 
