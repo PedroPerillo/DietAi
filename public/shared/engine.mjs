@@ -179,6 +179,28 @@ function marginalCost(items, committed, invQty) {
   return cost;
 }
 
+// Perishable packs: value of `items` that comes out of packs already opened this week
+// (reuse, nothing new to buy) and of new packs that `items` leave unused (likely waste).
+// Steering toward the first and away from the second keeps chicken, yogurt or spinach
+// from being bought for one meal and thrown out.
+export const PERISHABLE_REUSE_WEIGHT = 4;
+export const PERISHABLE_WASTE_WEIGHT = 3;
+function perishableEffect(items, committed, invQty) {
+  let reuse = 0;
+  let waste = 0;
+  for (const { id, qty } of items) {
+    const ingr = INGREDIENTS[id];
+    if (!ingr.perishable) continue;
+    const bought = Math.max(0, (committed[id] ?? 0) - invQty(id));
+    const open = bought > 0 ? Math.ceil(bought / ingr.pack - 1e-9) * ingr.pack - bought : 0;
+    const fromOpen = Math.min(qty, open);
+    reuse += fromOpen * unitPrice(id);
+    const rest = qty - fromOpen;
+    if (rest > 0 && invQty(id) <= (committed[id] ?? 0)) waste += (Math.ceil(rest / ingr.pack - 1e-9) * ingr.pack - rest) * unitPrice(id);
+  }
+  return { reuse, waste };
+}
+
 const inventoryLookup = (inventory) => {
   const map = new Map(inventory.map((e) => [e.id, e.qty == null ? Infinity : e.qty]));
   return (id) => map.get(id) ?? 0;
@@ -198,6 +220,10 @@ export function planWeek(profile, targets, { costWeight = 0, pinned = {}, avoid 
   const notes = [];
   const out = [];
   const budgetPerMeal = 3; // fixed reference so the cost weight means the same for every budget
+  const packScore = (items) => {
+    const { reuse, waste } = perishableEffect(items, committed, invQty);
+    return (PERISHABLE_WASTE_WEIGHT * waste - PERISHABLE_REUSE_WEIGHT * reuse) / budgetPerMeal;
+  };
   // Cost per 100 kcal ranking per slot (used only under strong budget pressure).
   const cheapRank = new Map();
   const cheapCut = {};
@@ -234,7 +260,8 @@ export function planWeek(profile, targets, { costWeight = 0, pinned = {}, avoid 
         const noCost = (used[r.id] ?? 0) * 1.2 + (out[d - 1]?.meals.some((m) => m.recipeId === r.id) ? 0.8 : 0) - inv * 0.5
           + (soft.includes('skill') ? 0.4 : 0) + (soft.includes('ice-pack') ? 0.5 : 0)
           + (prefs.style === 'quick' ? minutes / 25 : 0) + (prefs.style === 'bought' && r.style === 'assembled' ? -0.4 : 0)
-          + (prefs.style === 'homemade' && r.style === 'homemade' ? -0.3 : 0) + (ctx.busy ? minutes / 30 : 0);
+          + (prefs.style === 'homemade' && r.style === 'homemade' ? -0.3 : 0) + (ctx.busy ? minutes / 30 : 0)
+          + packScore(items);
         const score = noCost + costWeight * (marginalCost(items, committed, invQty) / budgetPerMeal);
         scored.push({ recipe: r, kind: 'cook', score, noCostScore: noCost, hard, soft, minutes });
       }
