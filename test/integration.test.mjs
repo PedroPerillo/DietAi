@@ -169,6 +169,32 @@ test('instacart rejects a link that is not https', async () => {
   }
 });
 
+test('checkout sends VEGAN on label-risk items for every non-omnivore diet', async () => {
+  let lastBody;
+  const srv = await fakeInstacart(async (req, res) => {
+    let raw = '';
+    for await (const c of req) raw += c;
+    lastBody = JSON.parse(raw);
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ products_link_url: 'https://instacart.example/l' }));
+  });
+  process.env.INSTACART_BASE_URL = `http://localhost:${srv.address().port}`;
+  process.env.INSTACART_API_KEY = 'test-key';
+  const filtersFor = async (dietary) => {
+    const res = await post('/api/checkout', { provider: 'instacart', items: [{ ingredientId: 'curry_paste', quantity: 15 }], dietary });
+    assert.equal(res.status, 200);
+    return lastBody.line_items[0].filters?.health_filters ?? [];
+  };
+  try {
+    for (const diet of ['vegan', 'vegetarian', 'pescatarian']) assert.deepEqual(await filtersFor({ diet, allergies: [] }), ['VEGAN'], diet);
+    assert.deepEqual(await filtersFor({ diet: 'omnivore', allergies: [] }), []);
+    assert.deepEqual(await filtersFor({ diet: 'omnivore', allergies: ['gluten'] }), ['GLUTEN_FREE']);
+    assert.deepEqual(await filtersFor(undefined), []);
+  } finally {
+    srv.close();
+    delete process.env.INSTACART_API_KEY;
+  }
+});
+
 test('instacart health filters go only on ingredients with a label risk', () => {
   const dietary = { glutenFree: true, vegan: true };
   assert.deepEqual(toLineItem(lineFor('curry_paste', 15), dietary).filters, { health_filters: ['GLUTEN_FREE', 'VEGAN'] });
