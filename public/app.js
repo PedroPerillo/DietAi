@@ -28,9 +28,27 @@ const svgIcon = (markup) => {
   return t.content.firstChild;
 };
 
-let state = { result: null, owned: [], day: 0, form: null };
-const save = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+const EMPTY_STATE = { result: null, owned: [], day: 0, form: null };
+let state = { ...EMPTY_STATE };
 let config;
+let userId = null; // Clerk user id when sign-in is on; plans are stored per user on this device
+const storageKey = () => (userId ? `${STORAGE_KEY}:${userId}` : STORAGE_KEY);
+const save = () => localStorage.setItem(storageKey(), JSON.stringify(state));
+
+function loadState() {
+  state = { ...EMPTY_STATE };
+  try {
+    // A plan made before sign-in existed moves to the first account that signs in here.
+    if (userId && !localStorage.getItem(storageKey()) && localStorage.getItem(STORAGE_KEY)) {
+      localStorage.setItem(storageKey(), localStorage.getItem(STORAGE_KEY));
+      localStorage.removeItem(STORAGE_KEY);
+    }
+    const saved = JSON.parse(localStorage.getItem(storageKey()));
+    if (saved?.result?.plan?.days && Array.isArray(saved.owned)) state = { ...EMPTY_STATE, ...saved };
+  } catch {
+    localStorage.removeItem(storageKey());
+  }
+}
 
 // AbortSignal.any needs Safari 17.4 and AbortSignal.timeout Safari 16; fall back so older
 // iPhones (iOS 15/16) can still build plans and load settings.
@@ -52,9 +70,12 @@ function anySignal(signals) {
 
 async function api(path, body, { timeoutMs = 150_000, signal } = {}) {
   const timeout = timeoutSignal(timeoutMs);
+  const headers = body ? { 'Content-Type': 'application/json' } : {};
+  const token = await window.Clerk?.session?.getToken().catch(() => null);
+  if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(path, {
     method: body ? 'POST' : 'GET',
-    headers: body ? { 'Content-Type': 'application/json' } : {},
+    headers,
     body: body ? JSON.stringify(body) : undefined,
     signal: signal ? anySignal([timeout, signal]) : timeout,
   }).catch((e) => {
@@ -69,6 +90,14 @@ async function api(path, body, { timeoutMs = 150_000, signal } = {}) {
     if (signal?.aborted) throw Object.assign(new Error('Cancelled.'), { cancelled: true });
     if (res.ok) throw new Error('The server sent an incomplete response. Please try again.');
     data = {};
+  }
+  if (res.status === 401 && config?.auth) {
+    // The server rejected the session (expired, or signed out elsewhere). Sign out of Clerk
+    // too, so the sign-in screen can't bounce straight back into the app.
+    const message = data.error || 'Please sign in to continue.';
+    await window.Clerk?.signOut().catch(() => {});
+    showSignIn(message);
+    throw Object.assign(new Error(message), { cancelled: true });
   }
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data;
@@ -458,6 +487,79 @@ function hideDone() {
   $('#h-home').focus();
 }
 
+// ================= Sign in (Clerk) =================
+// Brand-matched Clerk components (Brand Kit v1.0 colors, serif titles, Arial UI).
+const CLERK_APPEARANCE = {
+  variables: {
+    colorPrimary: '#0F3D32', colorPrimaryForeground: '#F3F0E7', colorForeground: '#1E2622', colorMutedForeground: '#4F5752',
+    colorBackground: '#FFFDF8', colorInput: '#FFFFFF', colorInputForeground: '#1E2622', colorBorder: '#958566', colorRing: '#86672F',
+    colorDanger: '#9B2C1F', colorSuccess: '#4E5E1C', fontFamily: 'Arial, Helvetica, sans-serif', borderRadius: '12px',
+  },
+  elements: {
+    headerTitle: { fontFamily: '"Times New Roman", Times, Georgia, serif', fontWeight: 400, fontSize: '28px', color: '#0F3D32' },
+    card: { boxShadow: '0 12px 32px rgba(0, 0, 0, .28)' },
+    userButtonAvatarBox: { width: '34px', height: '34px' },
+  },
+};
+
+function loadScript(src, attrs = {}) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = true;
+    s.crossOrigin = 'anonymous';
+    for (const [k, v] of Object.entries(attrs)) s.setAttribute(k, v);
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Could not load sign-in. Check your connection and refresh.'));
+    document.head.append(s);
+  });
+}
+
+async function startClerk({ publishableKey, frontendApi }) {
+  // Script-tag install per Clerk's JavaScript quickstart: UI bundle first, then clerk-js.
+  await loadScript(`https://${frontendApi}/npm/@clerk/ui@1/dist/ui.browser.js`);
+  await loadScript(`https://${frontendApi}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`, { 'data-clerk-publishable-key': publishableKey });
+  await window.Clerk.load({ ui: { ClerkUI: window.__internal_ClerkUICtor }, appearance: CLERK_APPEARANCE, afterSignOutUrl: '/' });
+  // Fires now and on every client/session/user change; only act when who's signed in changes.
+  window.Clerk.addListener(({ user }) => {
+    const next = user?.id ? `in:${user.id}` : 'out';
+    if (next === authState) return;
+    user?.id ? onSignedIn(user.id) : showSignIn();
+  });
+}
+
+let authState = null; // 'in:<userId>' | 'out', what the screen currently shows
+
+function showSignIn(message) {
+  if (building) building.abort();
+  authState = 'out';
+  userId = null;
+  state = { ...EMPTY_STATE };
+  $('#wizard').hidden = true;
+  $('#view-done').hidden = true;
+  $('.app').hidden = true;
+  $('#view-signin').hidden = false;
+  const Clerk = window.Clerk;
+  if (!Clerk) return;
+  Clerk.unmountUserButton?.($('#user-button'));
+  $('#signin-status').hidden = !message;
+  $('#signin-status').textContent = message ?? '';
+  Clerk.mountSignIn($('#clerk-signin'), { withSignUp: true });
+}
+
+function onSignedIn(id) {
+  authState = `in:${id}`;
+  userId = id;
+  window.Clerk.unmountSignIn?.($('#clerk-signin'));
+  $('#view-signin').hidden = true;
+  $('.app').hidden = false;
+  $('.app').inert = false;
+  window.Clerk.mountUserButton($('#user-button'));
+  loadState();
+  render();
+  showView('home');
+}
+
 // ================= App shell =================
 function showView(name) {
   if (name === 'groceries' && !state.result) name = 'home';
@@ -515,12 +617,20 @@ async function init() {
   );
   setDays(7);
 
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (saved?.result?.plan?.days && Array.isArray(saved.owned)) state = { day: 0, form: null, ...saved };
-  } catch {
-    localStorage.removeItem(STORAGE_KEY);
+  if (config.auth) {
+    // Sign-in required: keep the app hidden until Clerk reports a signed-in user.
+    $('.app').hidden = true;
+    $('#view-signin').hidden = false;
+    try {
+      await startClerk(config.auth);
+    } catch (err) {
+      $('#signin-status').hidden = false;
+      $('#signin-status').classList.add('error');
+      $('#signin-status').textContent = err.message;
+    }
+    return;
   }
+  loadState();
   render();
   showView('home');
 }

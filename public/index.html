@@ -17,7 +17,10 @@
   <div class="app">
     <header class="appbar">
       <img class="wordmark" src="/wordmark.jpg" alt="FitBite" width="720" height="260" />
-      <span id="ai-status" class="badge"></span>
+      <div class="appbar-right">
+        <span id="ai-status" class="badge"></span>
+        <div id="user-button" class="user-button"></div>
+      </div>
     </header>
 
     <main id="main">
@@ -100,6 +103,17 @@
       </button>
     </nav>
   </div>
+
+  <!-- ===== Sign in (Clerk) ===== -->
+  <section id="view-signin" class="signin" hidden aria-labelledby="h-signin">
+    <div class="signin-inner">
+      <img class="signin-logo" src="/logo-720.jpg" srcset="/logo-720.jpg 720w, /logo-1200.jpg 1200w" sizes="(min-width: 440px) 400px, 100vw" alt="FitBite. Every bite moves you forward." width="720" height="348" />
+      <h1 id="h-signin" class="visually-hidden">Sign in to FitBite</h1>
+      <div id="clerk-signin" class="clerk-signin"></div>
+      <p id="signin-status" class="signin-status" role="status">Loading sign-in…</p>
+      <p class="slogan">Small choices. New paths.</p>
+    </div>
+  </section>
 
   <!-- ===== Cart ready (full screen) ===== -->
   <section id="view-done" class="done" hidden aria-labelledby="h-done">
