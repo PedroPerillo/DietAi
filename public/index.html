@@ -3,31 +3,35 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#1f8a5b" />
+  <meta name="theme-color" content="#F3F0E7" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="FitBite" />
-  <title>FitBite: meal plans that shop for you</title>
-  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-  <link rel="apple-touch-icon" href="/icon.svg" />
+  <title>FitBite: every bite moves you forward</title>
+  <meta name="description" content="FitBite plans your meals around your goals and fills your grocery cart." />
+  <link rel="icon" href="/icon-96.png" type="image/png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <header class="appbar">
-    <div class="brand"><img src="/icon.svg" alt="" width="28" height="28" /><span>FitBite</span></div>
+    <a class="brand" href="/" aria-label="FitBite home"><img src="/icon-96.png" alt="FitBite" width="48" height="48" /></a>
     <span id="ai-status" class="badge"></span>
   </header>
 
   <nav class="tabs" aria-label="Steps">
-    <button type="button" class="tab" data-view="profile" aria-current="page"><span class="tab-icon" aria-hidden="true">👤</span><span>You</span></button>
-    <button type="button" class="tab" data-view="plan" disabled><span class="tab-icon" aria-hidden="true">🍽️</span><span>Plan</span></button>
-    <button type="button" class="tab" data-view="groceries" disabled><span class="tab-icon" aria-hidden="true">🛒</span><span>Groceries</span></button>
+    <button type="button" class="tab" data-view="profile" aria-current="page"><span class="tab-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg></span><span>You</span></button>
+    <button type="button" class="tab" data-view="plan" disabled><span class="tab-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="6.5"/><path d="M3 4v6a2 2 0 0 0 2 2M5 4v16M21 4c-1.5 0-2.5 2-2.5 5s1 3 2.5 3v8"/></svg></span><span>Plan</span></button>
+    <button type="button" class="tab" data-view="groceries" disabled><span class="tab-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h18l-2 11H5L3 9z"/><path d="M8 9l3-6M16 9l-3-6M9 13v4M15 13v4"/></svg></span><span>Groceries</span></button>
   </nav>
 
   <main>
     <section id="view-profile" class="view" aria-labelledby="h-profile">
+      <div class="hero">
+        <img src="/logo-720.jpg" srcset="/logo-720.jpg 720w, /logo-1200.jpg 1200w" sizes="(min-width: 768px) 420px, 100vw" alt="FitBite. Every bite moves you forward." width="720" height="348" />
+      </div>
       <h1 id="h-profile">Let's build your plan</h1>
-      <p class="lede">A few details and FitBite plans your meals, then fills your grocery cart.</p>
+      <p class="lede">A few details. Then FitBite plans your meals and fills your cart.</p>
       <form id="profile-form" novalidate>
         <div class="card">
           <h2>Your body</h2>
@@ -107,13 +111,13 @@
       <div id="days" class="days"></div>
       <p class="fine">Calories and macros are estimates. This is not medical advice. Talk to a doctor or registered dietitian before major diet changes, especially if you are pregnant, have a medical condition, or have a history of disordered eating.</p>
       <div class="actionbar">
-        <button type="button" class="primary block" data-goto="groceries">See my groceries →</button>
+        <button type="button" class="primary block" data-goto="groceries">Shop this plan</button>
       </div>
     </section>
 
     <section id="view-groceries" class="view" hidden aria-labelledby="h-groceries">
-      <h1 id="h-groceries">Groceries</h1>
-      <p class="lede">Untick anything you already have.</p>
+      <h1 id="h-groceries">Your groceries</h1>
+      <p class="lede">Untick anything you already have at home.</p>
       <p id="label-warning" class="warning" hidden>Recipes fit your allergies and diet, but the store picks the actual brand, so always check product labels before buying.</p>
       <div id="grocery-list"></div>
       <label class="field">Send to <select id="provider"></select></label>
