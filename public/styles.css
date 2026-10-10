@@ -1,6 +1,7 @@
 /* FitBite: app design (Oct 2026) on Brand Kit v1.0. Forest green base, gold accent, warm
-   neutrals; serif for short headings, Arial for UI. Built for a 390px phone; wider screens
-   center the same single column. */
+   neutrals; serif for short headings, Arial for UI. Mobile-first: the base styles are the
+   390px phone design; tablet (768px+) and desktop (1024px+) layouts are added at the end
+   through min-width queries only. */
 :root {
   --forest: #0F3D32; --forest-2: #164B3E; --header: #14332D; --olive: #90A63B; --gold: #C6A05B; --beige: #D3B996; --off-white: #CFCDCB; --warm: #F3F0E7;
   --ink: #1E2622; --muted: #4F5752; --muted-2: #5B625D; --eyebrow: #6B5A33; --gold-ink: #86672F;
@@ -35,7 +36,11 @@ svg { display: block; }
 main { flex: 1; padding: 24px 20px calc(var(--nav-h) + var(--safe-b) + 32px); }
 .view { display: flex; flex-direction: column; gap: 18px; }
 #view-groceries { padding-bottom: calc(var(--bar-h) + 8px); }
-#home-empty, #home-plan { display: flex; flex-direction: column; gap: 18px; }
+#home-empty, #home-plan, .home-col, .groceries-layout, .checkout-panel { display: flex; flex-direction: column; gap: 18px; }
+
+.skip-link { position: absolute; left: 12px; top: -60px; z-index: 100; padding: 10px 14px; border-radius: 10px; background: var(--gold); color: var(--forest); font-weight: 700; text-decoration: none; }
+.skip-link:focus { top: 12px; }
+main:focus { outline: none; }
 
 /* ---------- type ---------- */
 .display { margin: 0; font-family: var(--serif); font-weight: 400; color: var(--forest); line-height: 1.1; }
@@ -143,6 +148,9 @@ h1.display { font-size: 36px; }
 .tabbar { position: fixed; z-index: 30; left: 50%; transform: translateX(-50%); bottom: 0; width: min(100%, var(--col));
   height: calc(var(--nav-h) + var(--safe-b)); padding: 0 12px calc(16px + var(--safe-b)); background: var(--card); border-top: 1px solid var(--line);
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.tabbar > .tab[data-view="home"] { grid-column: 1; grid-row: 1; }
+.tabbar > .fab-wrap { grid-column: 2; grid-row: 1; }
+.tabbar > .tab[data-view="groceries"] { grid-column: 3; grid-row: 1; }
 .tab { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border: 0; border-top: 3px solid transparent; background: none; font-size: 12px; color: var(--muted-2); }
 .tab svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .tab[aria-current="page"] { color: var(--forest); font-weight: 700; border-top-color: var(--gold); }
@@ -150,6 +158,7 @@ h1.display { font-size: 36px; }
 .fab-wrap { display: flex; justify-content: center; }
 .fab { margin-top: -22px; width: 60px; height: 60px; border-radius: 50%; background: var(--gold); border: 4px solid var(--warm); display: flex; align-items: center; justify-content: center; box-shadow: 0 6px 16px rgba(15, 61, 50, .25); padding: 0; }
 .fab svg { width: 26px; height: 26px; fill: none; stroke: var(--forest); stroke-width: 2.4; stroke-linecap: round; }
+.fab-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; } /* visible on desktop */
 
 /* ---------- sign in ---------- */
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
@@ -273,8 +282,73 @@ legend small { font-weight: 400; color: var(--muted); }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
 
-/* ---------- wider screens: same single column, centered ---------- */
-@media (min-width: 560px) {
-  main { padding-top: 32px; }
-  .sheet { border-radius: 28px; margin-bottom: 24px; }
+/* ---------- short screens (phone in landscape) ---------- */
+@media (max-height: 520px) {
+  .sheet { padding-top: 6px; }
+  .handle { margin-bottom: 6px; }
+  .progress { margin: 6px 0 10px; }
+  .sheet h2.display { font-size: 24px; }
+  .sheet > .lede { margin: 2px 0 8px; font-size: 14px; }
+  .sheet-foot { padding-top: 10px; }
+  .btn-primary, .btn-outline { min-height: 46px; }
+}
+
+/* ---------- tablet: 768px and up ---------- */
+@media (min-width: 768px) {
+  .app { max-width: none; }
+  .appbar { padding-inline: max(24px, calc((100% - 1160px) / 2 + 32px)); }
+  main { width: 100%; max-width: 1160px; margin: 0 auto; padding: 32px 32px calc(var(--nav-h) + var(--safe-b) + 40px); }
+  h1.display { font-size: 42px; }
+  #home-empty { max-width: 560px; }
+
+  /* Home: overview + totals on the left, the selected day on the right; HTML order is
+     overview, then day, then the full-width groceries card, matching how it reads. */
+  .home-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 24px; align-items: start; }
+
+  /* Groceries: aisles flow down two columns (top-to-bottom, then the next column). */
+  #grocery-list { display: block; columns: 2; column-gap: 16px; }
+  #grocery-list .aisle { break-inside: avoid; margin-bottom: 16px; }
+  .checkout-panel .field { max-width: 420px; }
+
+  /* Bottom bars span the screen but keep their content centered. */
+  .tabbar { left: 0; transform: none; width: 100%; padding-inline: max(12px, calc((100% - 560px) / 2)); }
+  .checkoutbar { width: min(calc(100% - 64px), 1096px); }
+
+  /* Wizard becomes a centered dialog instead of a bottom sheet. */
+  .sheet-backdrop { align-items: center; padding: 24px; }
+  .sheet { border-radius: 28px; max-height: 100%; padding-bottom: 20px; box-shadow: 0 24px 60px rgba(0, 0, 0, .3); }
+  .sheet-foot { border-radius: 0 0 28px 28px; }
+  .handle { display: none; }
+}
+@media (min-width: 768px) and (max-height: 520px) {
+  .sheet-backdrop { padding: 8px 24px; }
+}
+
+/* ---------- desktop: 1024px and up ---------- */
+@media (min-width: 1024px) {
+  :root { --nav-h: 0px; }
+  .appbar { height: 72px; gap: 28px; }
+
+  /* The tab bar joins the top bar: Home and Groceries as links, "+ New plan" as a button. */
+  .tabbar { position: static; transform: none; width: auto; height: 100%; padding: 0; background: none; border: 0; display: flex; align-items: stretch; gap: 4px; flex: 1; }
+  .tab { flex-direction: row; gap: 8px; padding: 0 14px; border-top: 0; border-bottom: 3px solid transparent; font-size: 15px; color: var(--off-white); }
+  .tab svg { width: 20px; height: 20px; }
+  .tab[aria-current="page"] { color: var(--warm); border-top: 0; border-bottom-color: var(--gold); }
+  .tab:focus-visible, .fab:focus-visible { outline-color: var(--gold); outline-offset: -3px; }
+  .fab-wrap { margin-left: auto; align-items: center; }
+  .fab { margin: 0; width: auto; height: 44px; padding: 0 18px 0 14px; gap: 8px; border: 0; border-radius: 12px; box-shadow: none; }
+  .fab svg { width: 20px; height: 20px; }
+  .fab-label { position: static; width: auto; height: auto; overflow: visible; clip: auto; font-weight: 700; font-size: 15px; color: var(--forest); }
+  .user-button :focus-visible { outline-color: var(--gold); }
+
+  main { padding-bottom: 56px; }
+  .home-grid { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 32px; }
+
+  /* Groceries: list on the left, a sticky checkout panel on the right (no floating bar). */
+  .groceries-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 28px; align-items: start; }
+  #view-groceries { padding-bottom: 0; }
+  .checkout-panel { position: sticky; top: 96px; background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 20px; gap: 14px; }
+  .checkout-panel .field { max-width: none; }
+  .checkoutbar { position: static; transform: none; width: auto; min-height: 0; flex-direction: column; align-items: stretch; gap: 14px; padding: 18px; box-shadow: none; }
+  .checkoutbar .btn { width: 100%; }
 }
