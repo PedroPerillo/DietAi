@@ -901,7 +901,7 @@ function showDone(r, buy) {
   $('#done-meals').textContent = `${meals} over ${plan.days.length} day${plan.days.length > 1 ? 's' : ''}`;
   $('#done-total').textContent = fmtMoney(link ? total : r.total);
   $('#done-actions').replaceChildren(...[
-    link && el('a', { class: 'btn btn-gold', href: r.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open Instacart', svgIcon('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>')),
+    link && el('a', { class: 'btn btn-gold', href: r.url, target: '_blank', rel: 'noopener noreferrer' }, r.demo ? 'Open Instacart demo' : 'Open Instacart', svgIcon('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>')),
     el('button', { type: 'button', class: link ? 'btn btn-outline' : 'btn btn-gold', onclick: () => hideDone(true) }, "I've bought these"),
     el('button', { type: 'button', class: 'btn btn-outline', onclick: () => hideDone(false) }, 'Back to home'),
   ].filter(Boolean));
