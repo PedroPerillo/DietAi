@@ -10,7 +10,7 @@ const body = { sex: 'male', age: 40, heightCm: 180, weightKg: 85, activity: 'lig
 
 let server, base;
 before(async () => {
-  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.GROQ_API_KEY;
   delete process.env.INSTACART_API_KEY;
   server = createServer().listen(0);
   await new Promise((r) => server.once('listening', r));
@@ -251,10 +251,10 @@ test('clientIp cannot be spoofed through x-forwarded-for', async () => {
 });
 
 test('rate limit holds when a client rotates a spoofed first x-forwarded-for hop', async () => {
-  const prev = { key: process.env.ANTHROPIC_API_KEY, proxy: process.env.TRUST_PROXY };
+  const prev = { key: process.env.GROQ_API_KEY, proxy: process.env.TRUST_PROXY };
   // AI "on" so the limiter runs. The '{}' body then fails validation (400) before any
-  // Claude call, so a 400 means "got past the limiter".
-  process.env.ANTHROPIC_API_KEY = 'test-key';
+  // AI call, so a 400 means "got past the limiter".
+  process.env.GROQ_API_KEY = 'test-key';
   process.env.TRUST_PROXY = '1';
   const srv = createServer({ planRateLimit: 2 }).listen(0);
   await new Promise((r) => srv.once('listening', r));
@@ -267,7 +267,7 @@ test('rate limit holds when a client rotates a spoofed first x-forwarded-for hop
     assert.equal((await hit('10.0.0.1, 203.0.113.8')).status, 400); // a different real client has its own budget
   } finally {
     srv.close();
-    if (prev.key === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = prev.key;
+    if (prev.key === undefined) delete process.env.GROQ_API_KEY; else process.env.GROQ_API_KEY = prev.key;
     if (prev.proxy === undefined) delete process.env.TRUST_PROXY; else process.env.TRUST_PROXY = prev.proxy;
   }
 });

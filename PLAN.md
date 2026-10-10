@@ -20,7 +20,7 @@ Browser (public/)                     Server (lib/http.mjs, Node, no framework)
 ─────────────────                     ───────────────────────────────────────
 profile form ── POST /api/plan ─────▶ parseProfile → computeTargets (Mifflin-St Jeor, 1200 kcal floor)
                                       heuristicSkeleton  (always: checks constraints are satisfiable; fallback)
-                                      aiSkeleton (Claude, if ANTHROPIC_API_KEY)  → validateSkeleton
+                                      aiSkeleton (Groq, if GROQ_API_KEY)  → validateSkeleton
                                       buildPlan (nutrition from catalog) → groceryList
 plan + grocery list ◀────────────────
 uncheck "have it" ── POST /api/checkout ▶ parseCheckoutItems (rebuild from catalog) → provider.checkout
@@ -29,12 +29,12 @@ link / cart ◀─────────────────────�
 
 Key design decisions:
 
-1. **The AI chooses; the code does the math.** Claude picks recipes and portion sizes from a catalog. It never invents foods, quantities, or nutrition. Calories, macros, and grocery quantities are always computed from catalog data, so they can't be hallucinated.
-2. **Allergies are enforced in code, twice.** Allergen and diet tags live on *ingredients* and roll up to recipes automatically. The structured-output schema only offers Claude the recipe IDs the user is allowed to eat, and `validateSkeleton` re-checks every meal afterward. Any failure falls back to the deterministic planner, with a visible warning.
+1. **The AI chooses; the code does the math.** The model picks recipes and portion sizes from a catalog. It never invents foods, quantities, or nutrition. Calories, macros, and grocery quantities are always computed from catalog data, so they can't be hallucinated.
+2. **Allergies are enforced in code, twice.** Allergen and diet tags live on *ingredients* and roll up to recipes automatically. The structured-output schema only offers the model the recipe IDs the user is allowed to eat, and `validateSkeleton` re-checks every meal afterward. Any failure falls back to the deterministic planner, with a visible warning.
 3. **One canonical unit per ingredient.** Summing "200 g + 0.5 kg chicken" never happens, because every recipe uses the ingredient's canonical unit. Units Instacart doesn't support (bread slices, garlic cloves) are sent as whole packs (`package`, `head`).
 4. **The server never trusts the client's cart.** Checkout receives only `{ingredientId, quantity}`. Names, units, pack counts, and prices are rebuilt from the catalog.
-5. **Keys stay on the server.** The app runs fully without keys (built-in planner and demo cart). Adding `ANTHROPIC_API_KEY` and/or `INSTACART_API_KEY` turns the real integrations on.
-6. **Claude call:** `claude-opus-5-5`, adaptive thinking, `effort: medium`, JSON-schema structured output, and server-side refusal fallback (`fallbacks: "default"`). Refusals, truncation, malformed JSON, and constraint violations all surface as a friendly warning plus the fallback plan.
+5. **Keys stay on the server.** The app runs fully without keys (built-in planner and demo cart). Adding `GROQ_API_KEY` and/or `INSTACART_API_KEY` turns the real integrations on.
+6. **AI call:** Groq's OpenAI-compatible API with `openai/gpt-oss-120b` in strict JSON-schema mode (constrained decoding, so replies always match the schema), `reasoning_effort: low`, and a compact catalog prompt to fit the free plan's per-minute token budget. Rate limits (429), rejected keys, truncation, malformed JSON and constraint violations all surface as a friendly warning plus the built-in plan.
 
 ## Roadmap
 
@@ -66,4 +66,4 @@ Key design decisions:
 - **Allergen accuracy depends on catalog tagging.** Store products vary (e.g. cross-contamination, brand-specific soy sauce). Instacart `health_filters` (e.g. `GLUTEN_FREE`, `VEGAN`) should be added to line items for allergic users.
 - **Dislikes match by substring** ("egg" also excludes "eggplant"). Fine for a prototype; use ingredient-level tags in the MVP.
 - **Product matching.** Instacart matches by name, so "Rolled oats" may pick a different brand or size than expected. Kroger UPCs are exact but store-specific.
-- **AI cost and latency.** One plan is a single Claude call, roughly 15–60 s at `effort: medium`. Cache the catalog portion of the prompt once it grows, and consider a smaller model for single-meal swaps after measuring quality.
+- **AI cost, limits and latency.** One plan is a single Groq call (typically a few seconds). The free plan caps requests and tokens per minute and per day, so heavy use falls back to the built-in planner. Moving to a paid Groq plan or caching plans per profile would lift that.

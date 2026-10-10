@@ -70,7 +70,7 @@ test('a signed-in user can plan and check out', async () => {
 });
 
 test('rate limit is per user when signed in, even from the same IP', async () => {
-  await withEnv({ ANTHROPIC_API_KEY: 'test-key' }, async () => {
+  await withEnv({ GROQ_API_KEY: 'test-key' }, async () => {
     // '{}' fails validation (400) after the limiter, so 400 means "allowed through".
     const fresh = createServer({ authOn: () => true, verifyAuth: fakeVerify, planRateLimit: 1 }).listen(0);
     await new Promise((r) => fresh.once('listening', r));
