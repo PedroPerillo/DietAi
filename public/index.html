@@ -2,103 +2,128 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>DietAI: meal plan to grocery cart</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ctext y=%22.9em%22 font-size=%2290%22%3E%F0%9F%A5%97%3C/text%3E%3C/svg%3E" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#1f8a5b" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="FitBite" />
+  <title>FitBite: meal plans that shop for you</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/icon.svg" />
+  <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <header class="top">
-    <h1>DietAI</h1>
-    <p class="tag">Tell us about you. Get a meal plan. Send the groceries to your cart.</p>
+  <header class="appbar">
+    <div class="brand"><img src="/icon.svg" alt="" width="28" height="28" /><span>FitBite</span></div>
     <span id="ai-status" class="badge"></span>
   </header>
 
+  <nav class="tabs" aria-label="Steps">
+    <button type="button" class="tab" data-view="profile" aria-current="page"><span class="tab-icon" aria-hidden="true">👤</span><span>You</span></button>
+    <button type="button" class="tab" data-view="plan" disabled><span class="tab-icon" aria-hidden="true">🍽️</span><span>Plan</span></button>
+    <button type="button" class="tab" data-view="groceries" disabled><span class="tab-icon" aria-hidden="true">🛒</span><span>Groceries</span></button>
+  </nav>
+
   <main>
-    <section id="step-profile" class="card" aria-labelledby="h-profile">
-      <h2 id="h-profile">1. About you</h2>
+    <section id="view-profile" class="view" aria-labelledby="h-profile">
+      <h1 id="h-profile">Let's build your plan</h1>
+      <p class="lede">A few details and FitBite plans your meals, then fills your grocery cart.</p>
       <form id="profile-form" novalidate>
-        <fieldset class="grid">
-          <label>Units
-            <select name="units"><option value="imperial">US (lb, ft/in)</option><option value="metric">Metric (kg, cm)</option></select>
-          </label>
-          <label>Sex
-            <select name="sex" required><option value="female">Female</option><option value="male">Male</option></select>
-          </label>
-          <label>Age <input name="age" type="number" min="18" max="100" value="30" required /></label>
-          <label class="imperial">Height
-            <span class="pair"><input name="heightFt" type="number" min="4" max="7" value="5" aria-label="feet" />ft
-            <input name="heightIn" type="number" min="0" max="11" value="7" aria-label="inches" />in</span>
-          </label>
-          <label class="metric" hidden>Height (cm) <input name="heightCm" type="number" min="120" max="230" value="170" /></label>
-          <label class="imperial">Weight (lb) <input name="weightLb" type="number" min="80" max="660" value="160" /></label>
-          <label class="metric" hidden>Weight (kg) <input name="weightKg" type="number" min="35" max="300" value="72" /></label>
-          <label>Activity
+        <div class="card">
+          <h2>Your body</h2>
+          <div class="seg" role="radiogroup" aria-label="Sex">
+            <label><input type="radio" name="sex" value="female" checked /><span>Female</span></label>
+            <label><input type="radio" name="sex" value="male" /><span>Male</span></label>
+          </div>
+          <div class="seg seg-sm" role="radiogroup" aria-label="Units">
+            <label><input type="radio" name="units" value="imperial" checked /><span>lb · ft</span></label>
+            <label><input type="radio" name="units" value="metric" /><span>kg · cm</span></label>
+          </div>
+          <div class="fields">
+            <label>Age <input name="age" type="number" inputmode="numeric" min="18" max="100" value="30" required /></label>
+            <label class="imperial">Weight (lb) <input name="weightLb" type="number" inputmode="decimal" min="80" max="660" value="160" /></label>
+            <label class="metric" hidden>Weight (kg) <input name="weightKg" type="number" inputmode="decimal" min="35" max="300" value="72" /></label>
+            <label class="imperial span2">Height
+              <span class="pair"><input name="heightFt" type="number" inputmode="numeric" min="4" max="7" value="5" aria-label="feet" /><span>ft</span>
+              <input name="heightIn" type="number" inputmode="numeric" min="0" max="11" value="7" aria-label="inches" /><span>in</span></span>
+            </label>
+            <label class="metric span2" hidden>Height (cm) <input name="heightCm" type="number" inputmode="numeric" min="120" max="230" value="170" /></label>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Your goal</h2>
+          <div class="choices" role="radiogroup" aria-label="Goal">
+            <label><input type="radio" name="goal" value="lose" /><span><b>Lose weight</b><small>About 0.5 kg / 1 lb a week</small></span></label>
+            <label><input type="radio" name="goal" value="maintain" checked /><span><b>Maintain</b><small>Eat well, stay steady</small></span></label>
+            <label><input type="radio" name="goal" value="gain" /><span><b>Build muscle</b><small>Small surplus, high protein</small></span></label>
+          </div>
+          <label class="field">How active are you?
             <select name="activity">
-              <option value="sedentary">Sedentary (desk job)</option>
-              <option value="light">Light (1–3 workouts/wk)</option>
-              <option value="moderate" selected>Moderate (3–5/wk)</option>
-              <option value="active">Active (6–7/wk)</option>
-              <option value="very_active">Very active (athlete / physical job)</option>
+              <option value="sedentary">Mostly sitting</option>
+              <option value="light">Light: 1–3 workouts a week</option>
+              <option value="moderate" selected>Moderate: 3–5 a week</option>
+              <option value="active">Active: 6–7 a week</option>
+              <option value="very_active">Athlete or physical job</option>
             </select>
           </label>
-          <label>Goal
-            <select name="goal">
-              <option value="lose">Lose weight</option>
-              <option value="maintain" selected>Maintain</option>
-              <option value="gain">Build muscle / gain</option>
-            </select>
-          </label>
-          <label>Diet
+        </div>
+
+        <div class="card">
+          <h2>How you eat</h2>
+          <label class="field">Diet
             <select name="diet">
-              <option value="omnivore">No restrictions</option>
+              <option value="omnivore">Everything</option>
               <option value="pescatarian">Pescatarian</option>
               <option value="vegetarian">Vegetarian</option>
               <option value="vegan">Vegan</option>
             </select>
           </label>
-          <label>Days to plan <input name="days" type="number" min="1" max="7" value="7" /></label>
-        </fieldset>
-        <fieldset>
-          <legend>Allergies (kept out of every recipe)</legend>
-          <div id="allergies" class="chips"></div>
-        </fieldset>
-        <fieldset class="grid">
-          <label>Foods you dislike <input name="dislikes" placeholder="e.g. mushrooms, tuna" /></label>
-          <label class="check"><input name="snacks" type="checkbox" checked /> Include a daily snack</label>
-          <label class="wide">Anything else? <textarea name="notes" rows="2" maxlength="500" placeholder="e.g. quick lunches, I meal-prep on Sundays"></textarea></label>
-        </fieldset>
+          <fieldset>
+            <legend>Allergies <small>(kept out of every recipe)</small></legend>
+            <div id="allergies" class="chips"></div>
+          </fieldset>
+          <label class="field">Foods you dislike <input name="dislikes" autocomplete="off" placeholder="e.g. mushrooms, tuna" /></label>
+          <div class="fields">
+            <label>Days to plan <input name="days" type="number" inputmode="numeric" min="1" max="7" value="7" /></label>
+            <label class="switch"><input name="snacks" type="checkbox" checked /><span>Daily snack</span></label>
+          </div>
+          <label class="field">Anything else? <textarea name="notes" rows="2" maxlength="500" placeholder="e.g. quick lunches, I meal-prep on Sundays"></textarea></label>
+        </div>
+
         <p id="form-error" class="error" role="alert" hidden></p>
-        <button id="generate" type="submit" class="primary">Build my plan</button>
+        <div class="actionbar">
+          <button id="generate" type="submit" class="primary block">Build my plan</button>
+        </div>
       </form>
     </section>
 
-    <section id="step-plan" class="card" hidden aria-labelledby="h-plan">
-      <div class="row">
-        <h2 id="h-plan">2. Your plan</h2>
-        <button id="restart" type="button" class="link">Edit details</button>
-      </div>
+    <section id="view-plan" class="view" hidden aria-labelledby="h-plan">
+      <h1 id="h-plan">Your plan</h1>
       <p id="plan-warning" class="warning" role="status" hidden></p>
-      <p id="plan-summary"></p>
+      <p id="plan-summary" class="lede"></p>
       <div id="targets" class="targets"></div>
+      <div id="day-chips" class="day-chips" role="tablist" aria-label="Days"></div>
       <div id="days" class="days"></div>
-      <p class="fine">Calories and macros are estimates. This is not medical advice. Talk to a doctor or registered dietitian before making major diet changes, especially if you are pregnant, have a medical condition, or have a history of disordered eating.</p>
+      <p class="fine">Calories and macros are estimates. This is not medical advice. Talk to a doctor or registered dietitian before major diet changes, especially if you are pregnant, have a medical condition, or have a history of disordered eating.</p>
+      <div class="actionbar">
+        <button type="button" class="primary block" data-goto="groceries">See my groceries →</button>
+      </div>
     </section>
 
-    <section id="step-groceries" class="card" hidden aria-labelledby="h-groceries">
-      <h2 id="h-groceries">3. Groceries</h2>
-      <p class="hint">Uncheck anything you already have at home.</p>
+    <section id="view-groceries" class="view" hidden aria-labelledby="h-groceries">
+      <h1 id="h-groceries">Groceries</h1>
+      <p class="lede">Untick anything you already have.</p>
       <p id="label-warning" class="warning" hidden>You listed allergies. Recipes avoid them, but the store picks the actual brand, so always check product labels before buying.</p>
       <div id="grocery-list"></div>
-      <div class="checkout">
-        <div><strong>Estimated total: <span id="grocery-total">$0.00</span></strong> <span class="fine">(prices are estimates; the store sets the final price)</span></div>
-        <div class="row">
-          <label>Send to <select id="provider"></select></label>
-          <button id="checkout" type="button" class="primary">Send to cart</button>
-        </div>
-        <p id="checkout-error" class="error" role="alert" hidden></p>
-        <div id="checkout-result" role="status"></div>
+      <label class="field">Send to <select id="provider"></select></label>
+      <p id="checkout-error" class="error" role="alert" hidden></p>
+      <div id="checkout-result" role="status"></div>
+      <div class="actionbar checkoutbar">
+        <div class="total"><small>Estimated</small><strong id="grocery-total">$0.00</strong></div>
+        <button id="checkout" type="button" class="primary">Send to cart</button>
       </div>
+      <p class="fine">Prices are estimates; the store sets the final price. You review and pay on the store's site.</p>
     </section>
   </main>
   <script type="module" src="/app.js"></script>

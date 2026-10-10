@@ -1,4 +1,4 @@
-# DietAI: feasibility and plan
+# FitBite: feasibility and plan
 
 **Question:** can an app use AI to build a diet plan and then buy the groceries through an API?
 
@@ -44,6 +44,7 @@ Key design decisions:
 - [x] Allergy / diet / dislike enforcement in code
 - [x] Aggregated grocery list with pack rounding, "already have it" toggles, and an estimated total
 - [x] Demo cart and an Instacart shopping-list link
+- [x] Mobile-first UI: bottom tab bar, swipeable day cards, sticky checkout bar, installable to home screen
 - [x] Tests: unit, HTTP round trip, fake Instacart (success/500/timeout), fake Anthropic (request shape, refusal, truncation, bad JSON, constraint violations)
 
 **Phase 2: MVP**

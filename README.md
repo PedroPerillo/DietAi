@@ -1,6 +1,6 @@
-# DietAI
+# FitBite
 
-Tell it about yourself and it builds a meal plan, turns the plan into a grocery list, and sends that list to a real grocery cart.
+Mobile-first web app: tell it about yourself and it builds a meal plan, turns the plan into a grocery list, and sends that list to a real grocery cart. Install it to your phone home screen from the browser menu.
 
 See [PLAN.md](PLAN.md) for the feasibility analysis (which grocery APIs can do what), the architecture, and the roadmap.
 
@@ -34,7 +34,7 @@ lib/plan.mjs            built-in planner, skeleton validation, plan builder
 lib/ai.mjs              Claude planner (structured output constrained to allowed recipes)
 lib/grocery.mjs         aggregation, pack rounding, checkout input rebuilding
 lib/stores/             grocery providers: mock, instacart
-public/                 single-page UI (vanilla JS, no build step)
+public/                 mobile-first single-page UI (vanilla JS, no build step, installable manifest)
 test/                   node:test suites
 ```
 

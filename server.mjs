@@ -11,7 +11,7 @@ import { PROVIDERS, getProvider, listProviders } from './lib/stores/index.mjs';
 
 const PUBLIC_DIR = fileURLToPath(new URL('./public/', import.meta.url));
 const MAX_BODY = 64 * 1024;
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
 
 function httpError(status, message) {
   return Object.assign(new Error(message), { status });
@@ -64,7 +64,7 @@ export async function generatePlan(body, { planner = aiSkeleton, useAi = aiEnabl
   let skeleton = heuristicSkeleton(profile, targets);
   let source = 'heuristic';
   let summary = '';
-  let warning = useAi ? null : 'AI is off (no ANTHROPIC_API_KEY), so this plan came from the built-in planner.';
+  let warning = useAi ? null : 'AI is off on this server, so this plan came from the built-in planner.';
   if (useAi) {
     try {
       const result = await planner(profile, targets, { signal });
@@ -171,6 +171,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // Loopback by default; set HOST=0.0.0.0 to expose it (e.g. in a container).
   const host = process.env.HOST || '127.0.0.1';
   createServer().listen(port, host, () => {
-    console.log(`DietAI on http://${host}:${port}  (AI: ${aiEnabled() ? MODEL : 'off'}, Instacart: ${PROVIDERS.instacart.ready() ? 'on' : 'off'})`);
+    console.log(`FitBite on http://${host}:${port}  (AI: ${aiEnabled() ? MODEL : 'off'}, Instacart: ${PROVIDERS.instacart.ready() ? 'on' : 'off'})`);
   });
 }

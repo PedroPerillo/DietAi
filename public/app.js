@@ -1,4 +1,4 @@
-const STORAGE_KEY = 'dietai:v1';
+const STORAGE_KEY = 'fitbite:v1';
 const $ = (sel) => document.querySelector(sel);
 const fmtMoney = (n) => `$${n.toFixed(2)}`;
 const fmtQty = (q, unit) => `${+q.toFixed(2)} ${unit}${unit === 'each' || q === 1 || ['g', 'ml'].includes(unit) ? '' : 's'}`;
@@ -73,12 +73,12 @@ async function onGenerate(e) {
   showError($('#form-error'), null);
   generating = true;
   button.disabled = true;
-  button.textContent = config?.ai ? 'Building your plan… (AI can take up to a minute)' : 'Building your plan…';
+  button.textContent = config?.ai ? 'Planning… this can take a minute' : 'Planning…';
   try {
     state = { result: await api('/api/plan', readProfile(form)), owned: [] };
     save();
     render();
-    $('#step-plan').scrollIntoView({ behavior: 'smooth' });
+    showView('plan');
   } catch (err) {
     showError($('#form-error'), err.message);
   } finally {
@@ -101,20 +101,38 @@ function renderPlan({ plan, summary, warning, source }) {
     el('div', { class: 'stat' }, el('span', {}, 'Planned by'), el('b', {}, source === 'ai' ? 'AI' : 'Built-in'), el('span', {}, `${plan.days.length} day(s)`)),
   );
   if (t.floored) $('#plan-summary').append(el('p', { class: 'warning' }, `Your target was raised to the ${config.minKcal} kcal/day safety floor.`));
-  $('#days').replaceChildren(
+  const days = $('#days');
+  days.replaceChildren(
     ...plan.days.map((d) =>
-      el('article', { class: 'day' },
-        el('h3', {}, `Day ${d.day}`, el('small', {}, `${d.totals.kcal} kcal · ${d.totals.protein}g protein`)),
+      el('article', { class: 'day', id: `day-${d.day}`, 'aria-label': `Day ${d.day}` },
+        el('h3', {}, `Day ${d.day}`, el('small', {}, `${d.totals.kcal} kcal · ${Math.round(d.totals.protein)}g protein`)),
         d.meals.map((m) =>
           el('div', { class: 'meal' },
             el('span', { class: 'slot' }, m.slot),
-            el('span', {}, m.name, m.servings !== 1 ? ` ×${m.servings}` : ''),
-            el('span', { class: 'meta' }, `${m.kcal} kcal · P${Math.round(m.protein)} C${Math.round(m.carbs)} F${Math.round(m.fat)} · ${m.minutes} min`),
+            el('span', { class: 'name' }, m.name, m.servings !== 1 ? ` ×${m.servings}` : ''),
+            el('span', { class: 'kcal' }, `${m.kcal} kcal`),
+            el('span', { class: 'meta' }, `P ${Math.round(m.protein)}g · C ${Math.round(m.carbs)}g · F ${Math.round(m.fat)}g · ${m.minutes} min`),
           ),
         ),
       ),
     ),
   );
+  // Day chips drive the swipeable day cards on phones (hidden on wide screens).
+  $('#day-chips').replaceChildren(
+    ...plan.days.map((d, i) =>
+      el('button', {
+        type: 'button', class: 'day-chip', role: 'tab', 'aria-selected': String(i === 0), 'aria-controls': `day-${d.day}`,
+        onclick: () => days.scrollTo({ left: days.children[i].offsetLeft - days.offsetLeft, behavior: 'smooth' }),
+      }, `Day ${d.day}`),
+    ),
+  );
+  days.scrollLeft = 0;
+}
+
+function syncDayChip() {
+  const days = $('#days');
+  const i = Math.round(days.scrollLeft / (days.clientWidth || 1));
+  $('#day-chips').querySelectorAll('.day-chip').forEach((c, j) => c.setAttribute('aria-selected', String(i === j)));
 }
 
 // ---------- groceries ----------
@@ -140,7 +158,7 @@ function renderGroceries() {
                 renderGroceries();
               },
             }),
-            el('span', {}, g.name),
+            el('span', { class: 'iname' }, g.name),
             el('span', { class: 'qty' }, `need ${fmtQty(g.quantity, g.unit)}${g.packSize !== 1 ? ` · buy ${g.packs} pack${g.packs > 1 ? 's' : ''}` : ''}`),
             el('span', { class: 'price' }, fmtMoney(g.estPrice)),
           );
@@ -159,7 +177,10 @@ async function onCheckout() {
   const items = buying().map(({ ingredientId, quantity }) => ({ ingredientId, quantity }));
   showError($('#checkout-error'), null);
   $('#checkout-result').replaceChildren();
-  if (!items.length) return showError($('#checkout-error'), 'Nothing to buy. Every item is unchecked.');
+  if (!items.length) {
+    showError($('#checkout-error'), 'Nothing to buy. Every item is unchecked.');
+    return $('#checkout-error').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
   checkingOut = true;
   button.disabled = true;
   button.textContent = 'Sending…';
@@ -175,8 +196,11 @@ async function onCheckout() {
             el('p', {}, el('strong', {}, `Cart ${r.cartId} created · ${fmtMoney(r.total)}`), el('br'), r.message),
             el('table', {}, el('tbody', {}, r.items.map((i) => el('tr', {}, el('td', {}, `${i.packs} × ${i.name}`), el('td', {}, fmtMoney(i.price))))))),
     );
+    // The button lives in the sticky bar, so bring the outcome into view on small screens.
+    $('#checkout-result').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (err) {
     showError($('#checkout-error'), err.message);
+    $('#checkout-error').scrollIntoView({ behavior: 'smooth', block: 'center' });
   } finally {
     checkingOut = false;
     button.disabled = false;
@@ -185,10 +209,19 @@ async function onCheckout() {
 }
 
 // ---------- app ----------
+function showView(name) {
+  if (name !== 'profile' && !state.result) name = 'profile';
+  for (const v of document.querySelectorAll('.view')) v.hidden = v.id !== `view-${name}`;
+  for (const t of document.querySelectorAll('.tab')) {
+    if (t.dataset.view === name) t.setAttribute('aria-current', 'page');
+    else t.removeAttribute('aria-current');
+  }
+  window.scrollTo({ top: 0 });
+}
+
 function render() {
   const has = Boolean(state.result);
-  $('#step-plan').hidden = !has;
-  $('#step-groceries').hidden = !has;
+  for (const t of document.querySelectorAll('.tab')) if (t.dataset.view !== 'profile') t.disabled = !has;
   if (!has) return;
   renderPlan(state.result);
   renderGroceries();
@@ -202,17 +235,20 @@ async function init() {
   } catch (err) {
     return showError($('#form-error'), `Could not load app settings: ${err.message}`);
   }
-  $('#ai-status').textContent = config.ai ? `AI planner: ${config.model}` : 'AI off: using the built-in planner';
+  $('#ai-status').textContent = config.ai ? 'AI planner on' : 'Built-in planner';
+  $('#ai-status').title = config.ai ? `Plans by ${config.model}` : 'Set ANTHROPIC_API_KEY to plan with AI';
   $('#allergies').replaceChildren(
     ...config.allergens.map((a) => el('label', {}, el('input', { type: 'checkbox', name: 'allergies', value: a }), el('span', {}, a === 'nuts' ? 'tree nuts' : a))),
   );
   $('#provider').replaceChildren(
     ...config.providers.map((p) => el('option', { value: p.id, disabled: !p.ready, selected: p.ready && p.id !== 'mock' }, p.ready ? p.label : `${p.label} (not configured)`)),
   );
-  form.units.addEventListener('change', () => toggleUnits(form));
+  form.addEventListener('change', (e) => e.target.name === 'units' && toggleUnits(form));
   form.addEventListener('submit', onGenerate);
   $('#checkout').addEventListener('click', onCheckout);
-  $('#restart').addEventListener('click', () => $('#step-profile').scrollIntoView({ behavior: 'smooth' }));
+  for (const t of document.querySelectorAll('.tab')) t.addEventListener('click', () => showView(t.dataset.view));
+  for (const b of document.querySelectorAll('[data-goto]')) b.addEventListener('click', () => showView(b.dataset.goto));
+  $('#days').addEventListener('scroll', syncDayChip, { passive: true });
 
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
@@ -221,6 +257,7 @@ async function init() {
     localStorage.removeItem(STORAGE_KEY);
   }
   render();
+  showView(state.result ? 'plan' : 'profile');
 }
 
 init();

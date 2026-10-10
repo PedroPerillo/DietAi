@@ -1,9 +1,9 @@
 {
-  "name": "dietai",
+  "name": "fitbite",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "AI diet planner that turns a meal plan into a grocery order",
+  "description": "FitBite: AI meal planner that fills your grocery cart",
   "scripts": {
     "start": "node --env-file-if-exists=.env server.mjs",
     "test": "node --test test/*.test.mjs"
