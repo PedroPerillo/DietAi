@@ -16,7 +16,8 @@ Copy `.env.example` to `.env` to configure it. It works with no configuration: p
 
 | Variable | Effect |
 |---|---|
-| `ANTHROPIC_API_KEY` | Plans are built by Claude (`claude-opus-5-5`), validated server-side, with the built-in planner as fallback |
+| `GROQ_API_KEY` | Plans are built by Groq (`openai/gpt-oss-120b`, strict JSON-schema output), validated server-side, with the built-in planner as fallback. Works on Groq's free plan |
+| `GROQ_MODEL` | Optional. Another Groq model with strict structured outputs, e.g. `openai/gpt-oss-20b` |
 | `INSTACART_API_KEY` | Enables "Send to Instacart", which creates a shopping-list page link |
 | `INSTACART_BASE_URL` | Defaults to the dev environment `https://connect.dev.instacart.tools`. Use `https://connect.instacart.com` for production keys |
 | `PUBLIC_URL` | Optional link back to this app, shown on the Instacart page |
@@ -28,11 +29,11 @@ Copy `.env.example` to `.env` to configure it. It works with no configuration: p
 
 ## Deploy to Vercel
 
-The repo is ready to deploy as-is: `public/` is served from Vercel's CDN and `api/index.mjs` runs every `/api/*` route as one serverless function (120 s max, which covers the 90 s Claude deadline).
+The repo is ready to deploy as-is: `public/` is served from Vercel's CDN and `api/index.mjs` runs every `/api/*` route as one serverless function (120 s max, which covers the 90 s AI deadline).
 
 1. In Vercel: **Add New → Project → Import** `PedroPerillo/DietAi`. Leave the framework preset as **Other** and the build settings blank.
-2. **Before adding a Claude key to a public site, set a monthly spend limit** on the Anthropic workspace that owns it (Console → Settings → Limits). The rate limiter is per function instance and best-effort, so it won't stop traffic spread across many IPs or instances.
-3. Under **Settings → Environment Variables**, add `ANTHROPIC_API_KEY` (and optionally `INSTACART_API_KEY`, `INSTACART_BASE_URL`, `PUBLIC_URL`). Without them, the site still works with the built-in planner and the demo cart.
+2. **Use a free-plan Groq key for now.** Free-plan keys can't run up a bill; when the plan's per-minute or daily limit is hit, users get the built-in plan with a note. If you move to a paid Groq plan, set a spend limit in the Groq console first: the app's rate limiter is per function instance and best-effort.
+3. Under **Settings → Environment Variables**, add `GROQ_API_KEY` (and optionally `INSTACART_API_KEY`, `INSTACART_BASE_URL`, `PUBLIC_URL`). Without them, the site still works with the built-in planner and the demo cart.
 4. Deploy. Every push to `main` redeploys automatically.
 
 On Vercel the rate limiter uses the client IP Vercel's edge sets (`x-vercel-forwarded-for`). Elsewhere behind a proxy that appends to `x-forwarded-for` (nginx, most load balancers), set `TRUST_PROXY=1`; the last hop is used. Limits are kept per function instance, so they're best-effort; use a shared store (e.g. Upstash or Supabase) for strict limits.
@@ -55,7 +56,7 @@ lib/catalog.mjs         ingredients (unit, pack, price, allergens) + recipes (pe
 lib/profile.mjs         input validation, calorie/macro targets
 lib/plan.mjs            built-in planner, skeleton validation, plan builder
 lib/auth.mjs            Clerk session verification + public sign-in config
-lib/ai.mjs              Claude planner (structured output constrained to allowed recipes)
+lib/ai.mjs              Groq planner (strict structured output constrained to allowed recipes)
 lib/grocery.mjs         aggregation, pack rounding, checkout input rebuilding
 lib/stores/             grocery providers: mock, instacart
 public/                 mobile-first single-page UI (vanilla JS, no build step, installable manifest)

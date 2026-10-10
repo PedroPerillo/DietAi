@@ -236,7 +236,7 @@ function openWizard() {
   $('#wz-title').focus();
 }
 
-// Aborting also stops the server-side Claude call (the server watches for disconnects).
+// Aborting also stops the server-side AI call (the server watches for disconnects).
 function cancelBuild() {
   building?.abort();
   building = null;
@@ -629,7 +629,7 @@ async function init() {
     return showError($('#checkout-error'), `Could not load app settings: ${err.message}`);
   }
   $('#ai-status').textContent = config.ai ? 'AI planner on' : 'Built-in planner';
-  $('#ai-status').title = config.ai ? `Plans by ${config.model}` : 'Set ANTHROPIC_API_KEY to plan with AI';
+  $('#ai-status').title = config.ai ? `Plans by ${config.model}` : 'Set GROQ_API_KEY to plan with AI';
   $('#allergies').replaceChildren(
     ...config.allergens.map((a) => el('label', {}, el('input', { type: 'checkbox', name: 'allergies', value: a }), el('span', {}, ALLERGEN_LABEL[a] ?? a[0].toUpperCase() + a.slice(1)))),
   );
