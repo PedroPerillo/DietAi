@@ -83,3 +83,48 @@ test('rate limit is per user when signed in, even from the same IP', async () =>
     }
   });
 });
+
+// ---- 401 only for bad tokens; server/Clerk-side failures are 503 so nobody gets signed out ----
+const clerkError = (reason) => Object.assign(new Error(`clerk: ${reason}`), { reason });
+
+test('token problems are 401, server or Clerk outages are 503', async () => {
+  const quiet = { warn: console.warn, error: console.error };
+  const logged = [];
+  console.warn = console.error = (msg) => logged.push(msg);
+  try {
+    await withEnv({ CLERK_SECRET_KEY: 'sk_test_x', CLERK_AUTHORIZED_PARTIES: 'https://fitbite-pi.vercel.app' }, async () => {
+      const req = { headers: { authorization: 'Bearer some.jwt.token' } };
+      const cases = {
+        'token-expired': 401, 'token-invalid': 401, 'token-invalid-signature': 401, 'token-not-active-yet': 401,
+        'token-iat-in-the-future': 401, 'token-invalid-authorized-parties': 401,
+        'secret-key-invalid': 503, 'jwk-remote-failed-to-load': 503, 'jwk-remote-missing': 503, 'jwk-failed-to-resolve': 503, 'jwk-local-missing': 503,
+      };
+      for (const [reason, status] of Object.entries(cases)) {
+        await assert.rejects(verifyRequest(req, { verify: async () => { throw clerkError(reason); } }), (e) => e.status === status, reason);
+      }
+      await assert.rejects(verifyRequest(req, { verify: async () => { throw new TypeError('fetch failed'); } }), (e) => e.status === 503, 'network error');
+    });
+  } finally {
+    Object.assign(console, quiet);
+  }
+  // every failure is logged with its reason; the authorized-parties one includes the config
+  assert.ok(logged.some((m) => m.includes('secret-key-invalid')));
+  assert.ok(logged.some((m) => m.includes('token-invalid-authorized-parties') && m.includes('https://fitbite-pi.vercel.app')));
+});
+
+test('a misconfigured secret key returns 503 "temporarily unavailable" over HTTP, not 401', async () => {
+  const quietError = console.error;
+  console.error = () => {};
+  const s = createServer({ authOn: () => true, verifyAuth: (req) => verifyRequest(req, { verify: async () => { throw clerkError('secret-key-invalid'); } }) }).listen(0);
+  await new Promise((r) => s.once('listening', r));
+  try {
+    await withEnv({ CLERK_SECRET_KEY: 'sk_test_wrong' }, async () => {
+      const res = await fetch(`http://localhost:${s.address().port}/api/plan`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer a.b.c' }, body: JSON.stringify(profile) });
+      assert.equal(res.status, 503);
+      assert.match((await res.json()).error, /temporarily unavailable/);
+    });
+  } finally {
+    console.error = quietError;
+    s.close();
+  }
+});

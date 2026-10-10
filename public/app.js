@@ -92,11 +92,14 @@ async function api(path, body, { timeoutMs = 150_000, signal } = {}) {
     data = {};
   }
   if (res.status === 401 && config?.auth) {
-    // The server rejected the session (expired, or signed out elsewhere). Sign out of Clerk
-    // too, so the sign-in screen can't bounce straight back into the app.
+    // The server rejected the session itself (expired or invalid). Show sign-in first, then
+    // sign out of Clerk so the sign-in screen can't bounce straight back into the app. The
+    // message survives Clerk's post-sign-out reload via sessionStorage. (A 503 means sign-in
+    // is unavailable server-side and falls through as a normal error, keeping the user in.)
     const message = data.error || 'Please sign in to continue.';
-    await window.Clerk?.signOut().catch(() => {});
     showSignIn(message);
+    sessionStorage.setItem(SIGNIN_MESSAGE_KEY, message);
+    await window.Clerk?.signOut().catch(() => {});
     throw Object.assign(new Error(message), { cancelled: true });
   }
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
@@ -233,9 +236,14 @@ function openWizard() {
   $('#wz-title').focus();
 }
 
-function closeWizard({ restoreFocus = true } = {}) {
-  if (building) building.abort(); // stops the server-side Claude call too
+// Aborting also stops the server-side Claude call (the server watches for disconnects).
+function cancelBuild() {
+  building?.abort();
   building = null;
+}
+
+function closeWizard({ restoreFocus = true } = {}) {
+  cancelBuild();
   $('#wizard').hidden = true;
   $('.app').inert = false;
   if (restoreFocus && lastFocus?.isConnected && lastFocus.offsetParent !== null) lastFocus.focus();
@@ -529,9 +537,16 @@ async function startClerk({ publishableKey, frontendApi }) {
 }
 
 let authState = null; // 'in:<userId>' | 'out', what the screen currently shows
+const SIGNIN_MESSAGE_KEY = 'fitbite:signin-message';
 
 function showSignIn(message) {
-  if (building) building.abort();
+  const status = $('#signin-status');
+  if (authState === 'out' && !$('#view-signin').hidden) {
+    // Already on the sign-in screen: just update the message, don't mount Clerk twice.
+    if (message) { status.hidden = false; status.textContent = message; }
+    return;
+  }
+  cancelBuild();
   authState = 'out';
   userId = null;
   state = { ...EMPTY_STATE };
@@ -542,14 +557,20 @@ function showSignIn(message) {
   const Clerk = window.Clerk;
   if (!Clerk) return;
   Clerk.unmountUserButton?.($('#user-button'));
-  $('#signin-status').hidden = !message;
-  $('#signin-status').textContent = message ?? '';
+  const carried = message ?? sessionStorage.getItem(SIGNIN_MESSAGE_KEY);
+  sessionStorage.removeItem(SIGNIN_MESSAGE_KEY);
+  status.classList.remove('error');
+  status.hidden = !carried;
+  status.textContent = carried ?? '';
   Clerk.mountSignIn($('#clerk-signin'), { withSignUp: true });
 }
 
 function onSignedIn(id) {
+  // A plan still building belongs to whoever started it; never save it under another account.
+  if (building && userId !== id) { cancelBuild(); $('#wizard').hidden = true; }
   authState = `in:${id}`;
   userId = id;
+  sessionStorage.removeItem(SIGNIN_MESSAGE_KEY);
   window.Clerk.unmountSignIn?.($('#clerk-signin'));
   $('#view-signin').hidden = true;
   $('.app').hidden = false;
