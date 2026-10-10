@@ -219,6 +219,7 @@ test('the Vercel function entry serves the API with the same handler', async () 
   const url = `http://localhost:${srv.address().port}`;
   try {
     assert.equal((await fetch(`${url}/api/config`)).status, 200);
+    assert.equal((await fetch(`${url}/api/index?path=config`)).status, 200); // rewritten form
     const res = await fetch(`${url}/api/plan`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     assert.equal(res.status, 200);
     assert.equal((await res.json()).plan.days.length, 2);

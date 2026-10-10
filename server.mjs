@@ -157,11 +157,20 @@ async function serveStatic(req, res) {
   }
 }
 
+// Vercel's /api/:path* rewrite may hand the function /api/index?path=<rest> instead of
+// the original URL; map both forms to the same route key.
+function routePath(url) {
+  const [pathname, query = ''] = url.split('?');
+  if (pathname !== '/api/index') return pathname;
+  const rest = new URLSearchParams(query).get('path');
+  return rest ? `/api/${rest}` : pathname;
+}
+
 // The request handler on its own, shared by the local server and the Vercel function.
 export function createHandler({ planRateLimit = Number(process.env.PLAN_RATE_LIMIT) || 10 } = {}) {
   const routes = makeRoutes({ checkRateLimit: rateLimiter(planRateLimit) });
   return async (req, res) => {
-    const route = routes[`${req.method} ${req.url.split('?')[0]}`];
+    const route = routes[`${req.method} ${routePath(req.url)}`];
     if (!route) {
       if (req.url.startsWith('/api/')) return send(res, 404, { error: 'Not found' });
       if (req.method !== 'GET') return send(res, 405, { error: 'Method not allowed' });
