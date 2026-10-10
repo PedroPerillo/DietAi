@@ -14,16 +14,32 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
   <div class="app">
     <header class="appbar">
       <img class="wordmark" src="/wordmark.jpg" alt="FitBite" width="720" height="260" />
+      <!-- Main navigation: a bottom tab bar on phones/tablets, part of this top bar on desktop.
+           The + sits in the middle of the phone tab bar visually; in reading order it comes last. -->
+      <nav class="tabbar" aria-label="Main">
+        <button type="button" class="tab" data-view="home" aria-current="page">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7v9a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z" /></svg>Home
+        </button>
+        <button type="button" class="tab" data-view="groceries" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h2l2.5 11h11L21 8H6.5" /><circle cx="9" cy="19.5" r="1.5" /><circle cx="17" cy="19.5" r="1.5" /></svg>Groceries
+        </button>
+        <div class="fab-wrap">
+          <button type="button" class="fab" aria-label="New plan" data-open-wizard>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg><span class="fab-label">New plan</span>
+          </button>
+        </div>
+      </nav>
       <div class="appbar-right">
         <span id="ai-status" class="badge"></span>
         <div id="user-button" class="user-button"></div>
       </div>
     </header>
 
-    <main id="main">
+    <main id="main" tabindex="-1">
       <!-- ===== Home ===== -->
       <section id="view-home" class="view" aria-labelledby="h-home">
         <div id="home-empty" hidden>
@@ -36,6 +52,8 @@
         </div>
 
         <div id="home-plan" hidden>
+          <div class="home-grid">
+          <div class="home-col home-overview">
           <div class="title-row">
             <div>
               <p id="greeting" class="eyebrow">Hello</p>
@@ -60,8 +78,12 @@
             <div id="macros" class="macros"></div>
           </section>
 
+          </div>
+          <div class="home-col home-day">
           <div id="day-picker" class="day-picker" role="tablist" aria-label="Days"></div>
           <section id="meals" class="meals" aria-live="polite"></section>
+          </div>
+          </div>
 
           <button type="button" class="groceries-link" data-goto="groceries">
             <span class="tile-icon dark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h2l2.5 11h11L21 8H6.5" /><circle cx="9" cy="19.5" r="1.5" /><circle cx="17" cy="19.5" r="1.5" /></svg></span>
@@ -78,7 +100,9 @@
         <h1 id="h-groceries" class="display">Groceries</h1>
         <p id="groceries-sub" class="lede"></p>
         <p id="label-warning" class="notice" hidden>Recipes fit your allergies and diet, but the store picks the actual brand, so always check product labels before buying.</p>
+        <div class="groceries-layout">
         <div id="grocery-list"></div>
+        <aside class="checkout-panel" aria-label="Checkout">
         <label class="field">Send to <select id="provider"></select></label>
         <p class="fine">Prices are estimates. You review and pay on the store's site.</p>
         <p id="checkout-error" class="error" role="alert" hidden></p>
@@ -86,22 +110,11 @@
           <div class="total"><small id="total-label">Estimated</small><strong id="grocery-total">$0.00</strong></div>
           <button id="checkout" type="button" class="btn btn-gold">Send to cart</button>
         </div>
+        </aside>
+        </div>
       </section>
     </main>
 
-    <nav class="tabbar" aria-label="Main">
-      <button type="button" class="tab" data-view="home" aria-current="page">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7v9a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z" /></svg>Home
-      </button>
-      <div class="fab-wrap">
-        <button type="button" class="fab" aria-label="New plan" data-open-wizard>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-        </button>
-      </div>
-      <button type="button" class="tab" data-view="groceries" disabled>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h2l2.5 11h11L21 8H6.5" /><circle cx="9" cy="19.5" r="1.5" /><circle cx="17" cy="19.5" r="1.5" /></svg>Groceries
-      </button>
-    </nav>
   </div>
 
   <!-- ===== Sign in (Clerk) ===== -->
