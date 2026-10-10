@@ -256,7 +256,7 @@ h1.display { font-size: 36px; }
 .sheet-head { display: flex; justify-content: space-between; align-items: center; }
 .icon-btn { width: 44px; height: 44px; margin-right: -10px; border: 0; background: none; color: var(--ink); display: flex; align-items: center; justify-content: center; border-radius: 12px; }
 .icon-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
-.progress { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 10px 0 20px; }
+.progress { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; margin: 10px 0 20px; }
 .progress span { height: 5px; border-radius: 3px; background: var(--sand); }
 .progress span.on { background: var(--gold); }
 .sheet h2.display { font-size: 30px; }
@@ -280,6 +280,11 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { border-color
 .suffix { position: relative; }
 .suffix input { padding-right: 34px; }
 .suffix span { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); font-size: 13px; color: var(--muted); pointer-events: none; }
+.prefix { display: block; }
+.prefix input { padding-left: 28px; padding-right: 14px; }
+.prefix span { left: 14px; right: auto; font-size: 16px; }
+.weekdays label span, .carry-opts span { padding: 0 14px; }
+#pantry span { min-height: 40px; font-size: 13px; padding: 0 12px; }
 fieldset { border: 0; margin: 0; padding: 0; }
 legend { font-weight: 700; font-size: 14px; color: var(--ink); margin-bottom: 10px; }
 legend small { font-weight: 400; color: var(--muted); }
@@ -309,7 +314,8 @@ legend small { font-weight: 400; color: var(--muted); }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chips span { display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line-2); background: #fff; font-size: 14px; color: var(--ink); cursor: pointer; }
 .chips input:checked + span { background: var(--forest); border-color: var(--forest); color: var(--warm); }
-.chips input:checked + span::before { content: "✕"; margin-right: 6px; font-size: .8em; color: var(--gold); }
+.chips input:checked + span::before { content: "✓"; margin-right: 6px; font-size: .9em; color: var(--gold); }
+#allergies input:checked + span::before { content: "✕"; font-size: .8em; } /* allergies are kept out */
 
 .row-setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; padding: 6px 0; border-bottom: 1px solid var(--sand); font-size: 16px; color: var(--ink); }
 .row-setting label { flex-direction: row; font-size: 16px; color: var(--ink); }

@@ -171,8 +171,12 @@ const STEPS = [
   ['About you', 'We use this to estimate how much energy you need each day.'],
   ['Your goal', 'Pick where you want to go. You can change it any time.'],
   ['How you eat', 'Allergies are enforced on every recipe, not just suggested.'],
+  ['Your routine', 'So every meal fits your budget, your kitchen and your schedule.'],
   ['Final touches', 'Last details, then FitBite builds your week.'],
 ];
+const LAST_STEP = STEPS.length;
+const WEEKDAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const ALL_MEALS = ['breakfast', 'lunch', 'dinner', 'snack'];
 let step = 1;
 let building = null; // AbortController while a plan is being built
 let lastFocus = null;
@@ -181,27 +185,63 @@ const form = () => $('#profile-form');
 function readForm() {
   const f = new FormData(form());
   const get = (k) => f.get(k);
+  const days = (k) => f.getAll(k).map(Number);
+  const meals = f.getAll('meals');
   return {
     sex: get('sex'), units: get('units'), age: get('age'), weightLb: get('weightLb'), weightKg: get('weightKg'),
     heightFt: get('heightFt'), heightIn: get('heightIn'), heightCm: get('heightCm'), goal: get('goal'), activity: get('activity'),
-    diet: get('diet'), allergies: f.getAll('allergies'), dislikes: get('dislikes'), days: Number(get('days')), snacks: form().snacks.checked, notes: get('notes'),
+    diet: get('diet'), allergies: f.getAll('allergies'), dislikes: get('dislikes'), days: Number(get('days')), notes: get('notes'),
+    budget: get('budget'), meals, snacks: meals.includes('snack'), equipment: f.getAll('equipment'), skill: get('skill'), style: get('style'),
+    lunchWhere: get('lunchWhere'), lunchMicrowave: f.has('lunchMicrowave'), lunchFridge: f.has('lunchFridge'), lunchMinutes: get('lunchMinutes'),
+    busyDays: days('busyDays'), prepDays: days('prepDays'), pantry: f.getAll('pantry'),
   };
 }
 
-function writeForm(v) {
-  if (!v) return;
+// Answers saved before the routine step existed get its defaults.
+const ROUTINE_DEFAULTS = {
+  budget: '', equipment: ['stove', 'microwave', 'oven'], skill: 'comfortable', style: 'balanced', lunchWhere: 'home',
+  lunchMicrowave: false, lunchFridge: false, lunchMinutes: '20', busyDays: [], prepDays: [], pantry: [],
+};
+
+function writeForm(saved) {
+  if (!saved) return;
+  const v = { ...ROUTINE_DEFAULTS, meals: saved.snacks === false ? ALL_MEALS.slice(0, 3) : ALL_MEALS, ...saved };
   const fm = form();
-  for (const name of ['sex', 'units', 'goal', 'diet']) {
+  for (const name of ['sex', 'units', 'goal', 'diet', 'skill', 'lunchWhere']) {
     const r = fm.querySelector(`input[name="${name}"][value="${CSS.escape(String(v[name]))}"]`);
     if (r) r.checked = true;
   }
-  for (const name of ['age', 'weightLb', 'weightKg', 'heightFt', 'heightIn', 'heightCm', 'activity', 'dislikes', 'notes']) {
+  for (const name of ['age', 'weightLb', 'weightKg', 'heightFt', 'heightIn', 'heightCm', 'activity', 'dislikes', 'notes', 'budget', 'style', 'lunchMinutes']) {
     if (v[name] != null && fm.elements[name]) fm.elements[name].value = v[name];
   }
-  fm.querySelectorAll('input[name="allergies"]').forEach((c) => (c.checked = (v.allergies ?? []).includes(c.value)));
-  fm.snacks.checked = v.snacks !== false;
+  for (const name of ['allergies', 'meals', 'equipment', 'busyDays', 'prepDays', 'pantry']) {
+    const on = (v[name] ?? []).map(String);
+    fm.querySelectorAll(`input[name="${name}"]`).forEach((c) => (c.checked = on.includes(c.value)));
+  }
+  fm.elements.lunchMicrowave.checked = Boolean(v.lunchMicrowave);
+  fm.elements.lunchFridge.checked = Boolean(v.lunchFridge);
   setDays(v.days ?? 7);
   toggleUnits();
+  toggleCarry();
+}
+
+// Weekday routine for the planner: weekday lunches (where, time, fridge/microwave there)
+// and busy days, which only get quick meals.
+function toRoutine(v) {
+  const routine = {};
+  for (let wd = 0; wd < 7; wd++) {
+    const day = {};
+    const busy = v.busyDays.includes(wd);
+    if (busy) day.busy = true;
+    if (wd < 5 && v.meals.includes('lunch')) {
+      const minutes = Number(v.lunchMinutes);
+      const lunch = { minutes: busy ? Math.min(minutes, 15) : minutes };
+      if (v.lunchWhere === 'carry') Object.assign(lunch, { where: 'carry', microwave: v.lunchMicrowave, fridge: v.lunchFridge });
+      day.meals = { lunch };
+    }
+    if (Object.keys(day).length) routine[wd] = day;
+  }
+  return routine;
 }
 
 // API body; the server validates everything again.
@@ -213,7 +253,10 @@ function toProfile(v) {
     heightCm: imperial ? Math.round((n(v.heightFt) * 12 + n(v.heightIn)) * 2.54) : n(v.heightCm),
     weightKg: imperial ? Math.round(n(v.weightLb) * 0.4536 * 10) / 10 : n(v.weightKg),
     activity: v.activity, goal: v.goal, diet: v.diet, allergies: v.allergies, dislikes: v.dislikes ?? '',
-    days: v.days, snacks: v.snacks, notes: v.notes ?? '', startDate: localDate(),
+    days: v.days, meals: v.meals, notes: v.notes ?? '', startDate: localDate(),
+    budget: v.budget === '' || v.budget == null ? null : n(v.budget),
+    equipment: v.equipment, skill: v.skill, style: v.style, prepDays: v.prepDays, routine: toRoutine(v),
+    inventory: v.pantry.map((id) => ({ id, qty: null })),
   };
 }
 
@@ -223,6 +266,11 @@ function localDate(d = new Date()) {
 }
 
 function validateStep(n, v) {
+  if (n === 4) {
+    if (!v.meals.length) return 'Pick at least one meal a day.';
+    if (v.budget !== '' && !(Number(v.budget) >= 10 && Number(v.budget) <= 1000)) return 'Budget must be between $10 and $1,000 a week, or leave it empty.';
+    return null;
+  }
   if (n !== 1) return null;
   const inRange = (x, lo, hi) => x !== '' && Number(x) >= lo && Number(x) <= hi;
   if (!inRange(v.age, 18, 100)) return 'Age must be between 18 and 100.';
@@ -244,6 +292,10 @@ function toggleUnits() {
   $$('#profile-form .metric').forEach((n) => (n.hidden = imperial));
 }
 
+function toggleCarry() {
+  $('#profile-form .carry-opts').hidden = form().elements.lunchWhere.value !== 'carry';
+}
+
 function setDays(n) {
   const max = config?.maxDays ?? 7;
   const days = Math.min(max, Math.max(1, Number(n) || 7));
@@ -256,10 +308,18 @@ function setDays(n) {
 function renderPlanUses() {
   const v = readForm();
   const allergies = v.allergies.length ? `no ${v.allergies.map((a) => (ALLERGEN_LABEL[a] ?? a).toLowerCase()).join(', ')}` : 'no allergies';
+  const lunch = v.meals.includes('lunch') && (v.lunchWhere === 'carry'
+    ? `weekday lunch to go${v.lunchMicrowave ? ', microwave there' : ', no microwave'}`
+    : 'weekday lunch at home');
   $('#plan-uses').replaceChildren(
     el('span', {}, `${GOAL_LABEL[v.goal]} · ${ACTIVITY_LABEL[v.activity]}`),
     el('span', {}, `${DIET_LABEL[v.diet]} · ${allergies}`),
-    el('span', {}, `${v.days} day${v.days > 1 ? 's' : ''}${v.snacks ? ' + daily snack' : ''}`),
+    el('span', {}, `${v.days} day${v.days > 1 ? 's' : ''} · ${v.meals.join(', ')}`),
+    el('span', {}, [v.budget ? `$${Number(v.budget)} a week` : 'no budget limit', lunch].filter(Boolean).join(' · ')),
+    (v.busyDays.length > 0 || v.prepDays.length > 0) && el('span', {}, [
+      v.busyDays.length > 0 && `busy ${v.busyDays.map((d) => WEEKDAY_SHORT[d]).join(', ')}`,
+      v.prepDays.length > 0 && `prep on ${v.prepDays.map((d) => WEEKDAY_SHORT[d]).join(', ')}`,
+    ].filter(Boolean).join(' · ')),
   );
 }
 
@@ -267,12 +327,12 @@ function showStep(n) {
   step = n;
   $$('.step').forEach((s) => (s.hidden = Number(s.dataset.step) !== n));
   $$('.progress span').forEach((b, i) => b.classList.toggle('on', i < n));
-  $('#wz-step').textContent = `Step ${n} of 4`;
+  $('#wz-step').textContent = `Step ${n} of ${LAST_STEP}`;
   $('#wz-title').textContent = STEPS[n - 1][0];
   $('#wz-sub').textContent = STEPS[n - 1][1];
   $('#wz-back').textContent = n === 1 ? 'Cancel' : 'Back';
-  $('#wz-next').textContent = n === 4 ? 'Build my plan' : 'Continue';
-  if (n === 4) renderPlanUses();
+  $('#wz-next').textContent = n === LAST_STEP ? 'Build my plan' : 'Continue';
+  if (n === LAST_STEP) renderPlanUses();
   showError($('#form-error'), null);
   form().scrollTop = 0;
 }
@@ -283,6 +343,7 @@ function formFromProfile(p) {
   return {
     sex: p.sex, units: 'metric', age: p.age, weightKg: p.weightKg, heightCm: p.heightCm, goal: p.goal, activity: p.activity,
     diet: p.diet, allergies: p.allergies ?? [], dislikes: (p.dislikes ?? []).join(', '), days: p.days, snacks: p.snacks, notes: p.notes ?? '',
+    ...(p.meals && { meals: p.meals }),
   };
 }
 
@@ -317,7 +378,7 @@ function setLoading(on) {
   $('.progress').hidden = on;
   $('#wz-sub').hidden = on;
   $('#wz-title').hidden = on;
-  $('#wz-step').textContent = on ? 'Building your plan' : `Step ${step} of 4`;
+  $('#wz-step').textContent = on ? 'Building your plan' : `Step ${step} of ${LAST_STEP}`;
   if (on) $('#wz-loading-sub').textContent = config?.ai
     ? 'FitBite is choosing your meals. This can take up to a minute.'
     : 'Matching recipes to your goal and diet.';
@@ -327,7 +388,7 @@ async function onNext() {
   const v = readForm();
   const problem = validateStep(step, v);
   if (problem) return showError($('#form-error'), problem);
-  if (step < 4) return showStep(step + 1);
+  if (step < LAST_STEP) return showStep(step + 1);
   if (building) return; // double-tap guard
   building = new AbortController();
   setLoading(true);
@@ -349,7 +410,7 @@ async function onNext() {
     if (err.cancelled || building?.signal.aborted) return;
     building = null;
     setLoading(false);
-    showStep(4);
+    showStep(LAST_STEP);
     showError($('#form-error'), err.message);
   }
 }
@@ -959,7 +1020,16 @@ function render() {
   renderGroceries();
 }
 
+// Wizard chips that come from the catalog, not the server config.
+function renderWizardChips() {
+  const chip = (name, value, label) => el('label', {}, el('input', { type: 'checkbox', name, value }), el('span', {}, label));
+  for (const box of $$('#profile-form [data-weekdays]')) box.replaceChildren(...WEEKDAY_SHORT.map((d, i) => chip(box.dataset.weekdays, i, d)));
+  const staples = Object.entries(INGREDIENTS).filter(([, i]) => i.staple).sort((a, b) => a[1].name.localeCompare(b[1].name));
+  $('#pantry').replaceChildren(...staples.map(([id, i]) => chip('pantry', id, i.name)));
+}
+
 async function init() {
+  renderWizardChips();
   // Wire the shell first so the UI responds even if config is slow.
   $$('[data-open-wizard]').forEach((b) => b.addEventListener('click', openWizard));
   $$('[data-goto]').forEach((b) => b.addEventListener('click', () => showView(b.dataset.goto)));
@@ -968,9 +1038,11 @@ async function init() {
   $('#wz-back').addEventListener('click', () => (step === 1 ? closeWizard() : showStep(step - 1)));
   $('#wz-next').addEventListener('click', onNext);
   form().addEventListener('submit', (e) => { e.preventDefault(); onNext(); });
+  form().addEventListener('input', () => showError($('#form-error'), null));
   form().addEventListener('change', (e) => {
     if (e.target.name === 'units') toggleUnits();
-    if (step === 4) renderPlanUses();
+    if (e.target.name === 'lunchWhere') toggleCarry();
+    if (step === LAST_STEP) renderPlanUses();
   });
   $$('[data-days]').forEach((b) => b.addEventListener('click', () => { setDays(Number(form().elements.days.value) + Number(b.dataset.days)); renderPlanUses(); }));
   // Taps on the dimmed area close the sheet, but never cancel a plan that's being built.
