@@ -20,7 +20,7 @@ Copy `.env.example` to `.env` to configure it. It works with no configuration: p
 | `DEEPSEEK_MODEL` | Optional. Another DeepSeek chat model |
 | `GROQ_API_KEY` | Plans are built by Groq (`openai/gpt-oss-120b`, strict JSON-schema output), validated server-side, with the built-in planner as fallback. Works on Groq's free plan |
 | `GROQ_MODEL` | Optional. Another Groq model with strict structured outputs, e.g. `openai/gpt-oss-20b` |
-| `INSTACART_API_KEY` | Enables "Send to Instacart", which creates a shopping-list page link |
+| `INSTACART_API_KEY` | Enables the real "Send to Instacart", which creates a shopping-list page link. Without it, the button opens FitBite's own demo of the Instacart list page (`public/instacart-demo.html`): nothing is ordered |
 | `INSTACART_BASE_URL` | Defaults to the dev environment `https://connect.dev.instacart.tools`. Use `https://connect.instacart.com` for production keys |
 | `PUBLIC_URL` | Optional link back to this app, shown on the Instacart page |
 | `CLERK_PUBLISHABLE_KEY` + `CLERK_SECRET_KEY` | Turn on Clerk sign-in. Both are required; with either missing the app stays open. Plan and checkout then need a signed-in user |

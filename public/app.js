@@ -891,10 +891,12 @@ function showDone(r, buy) {
   const link = r.type === 'link';
   const total = buy.reduce((s, l) => s + l.estPrice, 0);
   pendingBuy = buy;
-  $('#h-done').textContent = link ? 'Your list is on Instacart' : 'Your demo cart is ready';
-  $('#done-sub').textContent = link
-    ? 'Pick your store, check the labels and pay there. Nothing is charged until you check out.'
-    : 'This is a simulated store: nothing is ordered or charged. With Instacart connected, you would pick a store and pay there.';
+  $('#h-done').textContent = link ? (r.demo ? 'Your list is on the Instacart demo' : 'Your list is on Instacart') : 'Your demo cart is ready';
+  $('#done-sub').textContent = !link
+    ? 'This is a simulated store: nothing is ordered or charged. With Instacart connected, you would pick a store and pay there.'
+    : r.demo
+      ? 'This is a mockup of the Instacart shopping-list page: pick a store and check out there. Nothing is ordered or charged.'
+      : 'Pick your store, check the labels and pay there. Nothing is charged until you check out.';
   $('#done-items').textContent = String(buy.length);
   $('#done-meals').textContent = `${meals} over ${plan.days.length} day${plan.days.length > 1 ? 's' : ''}`;
   $('#done-total').textContent = fmtMoney(link ? total : r.total);
@@ -1089,7 +1091,8 @@ async function init() {
     ...config.allergens.map((a) => el('label', {}, el('input', { type: 'checkbox', name: 'allergies', value: a }), el('span', {}, ALLERGEN_LABEL[a] ?? a[0].toUpperCase() + a.slice(1)))),
   );
   $('#provider').replaceChildren(
-    ...config.providers.map((p) => el('option', { value: p.id, disabled: !p.ready, selected: p.ready && p.id !== 'mock' }, p.ready ? (p.id === 'instacart' ? 'Instacart (pick your store)' : p.label) : `${p.label} (not set up)`)),
+    ...config.providers.map((p) => el('option', { value: p.id, disabled: !p.ready, selected: p.ready && p.id !== 'mock' },
+      !p.ready ? `${p.label} (not set up)` : p.id === 'instacart' ? (p.demo ? 'Instacart (demo)' : 'Instacart (pick your store)') : p.label)),
   );
   setDays(7);
 
