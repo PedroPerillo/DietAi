@@ -6,6 +6,8 @@
   /* derived for legible text (gold/olive fail contrast as text on light backgrounds) */
   --ink: var(--forest); --muted: #55665E; --gold-ink: #86672F; --line: #E2DBCB; --card: #FFFFFF; --bg: var(--warm);
   --tint: #EFE6D3; --olive-tint: #EEF1DC; --olive-ink: #4E5E1C;
+  /* non-text UI must reach 3:1 (WCAG 1.4.11): focus ring 4.2:1+ and field borders 3.2:1+ on every light surface */
+  --focus: var(--gold-ink); --field-border: #958566;
   --warn: #6B4E1E; --warn-bg: #F1E7D3; --err: #9B2C1F; --err-bg: #FBEDEA;
   --serif: "Times New Roman", Times, Georgia, serif; --sans: Arial, Helvetica, sans-serif;
   --radius: 16px; --tap: 48px; --nav-h: 64px; --safe-b: env(safe-area-inset-bottom, 0px);
@@ -36,7 +38,10 @@ main { padding: 12px 16px calc(var(--nav-h) + var(--safe-b) + 96px); max-width: 
 
 /* Official logo on its original background; >=320px wide everywhere (brand rule). */
 .hero { background: #14332B; border-radius: var(--radius); overflow: hidden; line-height: 0; margin-top: 4px; }
-.hero img { width: 100%; height: auto; min-width: 320px; }
+.hero img { width: 100%; height: auto; }
+/* Below 352px the padded column is under 320px, so let the logo run edge to edge rather
+   than shrink below the kit's 320px minimum or get cropped. */
+@media (max-width: 351px) { .hero { margin-inline: -16px; border-radius: 0; } }
 
 /* Sticky action bar sits just above the tab bar. */
 .actionbar { position: fixed; z-index: 25; left: 0; right: 0; bottom: calc(var(--nav-h) + var(--safe-b)); padding: 10px 16px;
@@ -57,15 +62,15 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: .9rem; color
 .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
 .span2 { grid-column: 1 / -1; }
 /* 16px+ font keeps iOS from zooming into inputs. */
-input, select, textarea { font: inherit; font-size: 16px; min-height: var(--tap); padding: 10px 12px; border: 1px solid #CFC6B3; border-radius: 12px; background: #fff; color: var(--ink); width: 100%; }
+input, select, textarea { font: inherit; font-size: 16px; min-height: var(--tap); padding: 10px 12px; border: 1px solid var(--field-border); border-radius: 12px; background: #fff; color: var(--ink); width: 100%; }
 textarea { min-height: 72px; resize: vertical; }
-input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid rgba(198, 160, 91, .6); outline-offset: 1px; border-color: var(--forest); }
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-color: var(--forest); }
 .pair { display: grid; grid-template-columns: 1fr auto 1fr auto; align-items: center; gap: 8px; color: var(--ink); }
 
 /* Visually hidden native inputs behind the custom controls (still focusable/accessible). */
 .seg label, .choices label, .chips label { position: relative; }
 .seg input, .choices input, .chips input { position: absolute; inset: 0; width: 1px; height: 1px; min-height: 0; padding: 0; margin: 0; border: 0; opacity: 0; pointer-events: none; }
-.seg input:focus-visible + span, .choices input:focus-visible + span, .chips input:focus-visible + span { outline: 3px solid rgba(198, 160, 91, .6); outline-offset: 1px; }
+.seg input:focus-visible + span, .choices input:focus-visible + span, .chips input:focus-visible + span { outline: 3px solid var(--focus); outline-offset: 2px; }
 
 /* segmented control from radios */
 .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--tint); border-radius: 12px; padding: 4px; margin-bottom: 12px; }
