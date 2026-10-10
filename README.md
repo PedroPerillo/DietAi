@@ -21,6 +21,8 @@ Copy `.env.example` to `.env` to configure it. It works with no configuration: p
 | `INSTACART_BASE_URL` | Defaults to the dev environment `https://connect.dev.instacart.tools`. Use `https://connect.instacart.com` for production keys |
 | `PUBLIC_URL` | Optional link back to this app, shown on the Instacart page |
 | `PORT` | Defaults to 3000 |
+| `HOST` | Defaults to `127.0.0.1`. Set `0.0.0.0` to expose it (containers, previews) |
+| `PLAN_RATE_LIMIT` | Plan requests per IP per minute when AI is on (default 10) |
 
 ## Layout
 

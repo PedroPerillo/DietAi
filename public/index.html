@@ -60,7 +60,7 @@
           <label>Days to plan <input name="days" type="number" min="1" max="7" value="7" /></label>
         </fieldset>
         <fieldset>
-          <legend>Allergies (strictly excluded)</legend>
+          <legend>Allergies (kept out of every recipe)</legend>
           <div id="allergies" class="chips"></div>
         </fieldset>
         <fieldset class="grid">
@@ -88,6 +88,7 @@
     <section id="step-groceries" class="card" hidden aria-labelledby="h-groceries">
       <h2 id="h-groceries">3. Groceries</h2>
       <p class="hint">Uncheck anything you already have at home.</p>
+      <p id="label-warning" class="warning" hidden>You listed allergies. Recipes avoid them, but the store picks the actual brand, so always check product labels before buying.</p>
       <div id="grocery-list"></div>
       <div class="checkout">
         <div><strong>Estimated total: <span id="grocery-total">$0.00</span></strong> <span class="fine">(prices are estimates; the store sets the final price)</span></div>

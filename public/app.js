@@ -149,6 +149,7 @@ function renderGroceries() {
     ),
   );
   $('#grocery-total').textContent = fmtMoney(buying().reduce((s, g) => s + g.estPrice, 0));
+  $('#label-warning').hidden = !state.result.profile?.allergies?.length;
 }
 
 let checkingOut = false;
@@ -163,7 +164,8 @@ async function onCheckout() {
   button.disabled = true;
   button.textContent = 'Sending…';
   try {
-    const r = await api('/api/checkout', { provider: $('#provider').value, items }, 30_000);
+    const { diet, allergies } = state.result.profile ?? {};
+    const r = await api('/api/checkout', { provider: $('#provider').value, items, dietary: { diet, allergies } }, 30_000);
     $('#checkout-result').replaceChildren(
       r.type === 'link'
         ? el('div', { class: 'result' },

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ALLERGENS, DIET_RANK, RECIPES, RECIPES_BY_ID, isRecipeAllowed } from '../lib/catalog.mjs';
 import { computeTargets, parseProfile, MIN_KCAL } from '../lib/profile.mjs';
-import { buildPlan, fitServings, heuristicSkeleton, validateSkeleton } from '../lib/plan.mjs';
+import { buildPlan, fitServings, heuristicSkeleton, validateSkeleton, MAX_SERVINGS } from '../lib/plan.mjs';
 import { groceryList, parseCheckoutItems } from '../lib/grocery.mjs';
 
 const base = { sex: 'female', age: 30, heightCm: 165, weightKg: 65, activity: 'moderate', goal: 'maintain', diet: 'omnivore', days: 3 };
@@ -15,9 +15,10 @@ test('recipe allergens are derived from ingredients (soy sauce brings gluten)', 
 });
 
 test('rejects malformed profiles with a 400', () => {
-  for (const bad of [{ age: 12 }, { weightKg: 'abc' }, { diet: 'keto' }, { allergies: ['cilantro'] }, { days: 30 }, { sex: undefined }]) {
-    assert.throws(() => profile(bad), (e) => e.status === 400, JSON.stringify(bad));
-  }
+  const cases = [{ age: 12 }, { weightKg: 'abc' }, { diet: 'keto' }, { allergies: ['cilantro'] }, { days: 30 }, { sex: undefined },
+    { allergies: 'peanuts' }, { allergies: { 0: 'peanuts' } }, { allergies: [['peanuts']] }, { dislikes: 42 }, { snacks: 'no' }];
+  for (const bad of cases) assert.throws(() => profile(bad), (e) => e.status === 400, JSON.stringify(bad));
+  for (const body of [null, undefined, [], 'x', 7]) assert.throws(() => parseProfile(body), (e) => e.status === 400, String(body));
 });
 
 test('calorie target never goes below the safety floor', () => {
@@ -26,12 +27,27 @@ test('calorie target never goes below the safety floor', () => {
   assert.equal(t.floored, true);
 });
 
-test('heuristic plans never include a forbidden recipe, for every diet x single-allergen combo', () => {
-  for (const diet of Object.keys(DIET_RANK)) {
-    for (const allergy of [null, ...ALLERGENS]) {
-      const p = profile({ diet, allergies: allergy ? [allergy] : [], days: 7 });
-      const skeleton = heuristicSkeleton(p, computeTargets(p));
-      assert.deepEqual(validateSkeleton(skeleton, p), [], `${diet}/${allergy}`);
+test('heuristic plans pass the full gate for every diet x allergen x body-size combo', () => {
+  const bodies = [
+    { age: 80, heightCm: 145, weightKg: 40, activity: 'sedentary', goal: 'lose' }, // floored at 1200
+    {},
+    { sex: 'male', age: 20, heightCm: 200, weightKg: 120, activity: 'very_active', goal: 'gain' },
+  ];
+  for (const body of bodies) {
+    for (const diet of Object.keys(DIET_RANK)) {
+      for (const allergy of [null, ...ALLERGENS]) {
+        for (const snacks of [true, false]) {
+          const p = profile({ ...body, diet, allergies: allergy ? [allergy] : [], snacks, days: 7 });
+          const t = computeTargets(p);
+          const skeleton = heuristicSkeleton(p, t);
+          // The only acceptable miss: a target so high that every meal is already maxed out.
+          const errors = validateSkeleton(skeleton, p, t).filter((e) => {
+            const d = /^day (\d+): \d+ kcal is not within/.exec(e);
+            return !(d && Object.values(skeleton[d[1] - 1]).every((m) => m.servings === MAX_SERVINGS));
+          });
+          assert.deepEqual(errors, [], `${JSON.stringify(body)} ${diet}/${allergy}/${snacks}`);
+        }
+      }
     }
   }
 });
@@ -59,8 +75,10 @@ test('dislikes exclude recipes by name or ingredient', () => {
 
 test('validateSkeleton catches each kind of bad AI output', () => {
   const p = profile({ diet: 'vegetarian', allergies: ['dairy'], days: 1, snacks: false });
+  const t = { kcal: 1310 };
   const ok = { breakfast: { recipeId: 'tofu-scramble', servings: 1 }, lunch: { recipeId: 'lentil-soup', servings: 1 }, dinner: { recipeId: 'chickpea-curry', servings: 1 } };
-  assert.deepEqual(validateSkeleton([ok], p), []);
+  const all = (servings) => Object.fromEntries(Object.entries(ok).map(([s, e]) => [s, { ...e, servings }]));
+  assert.deepEqual(validateSkeleton([ok], p, t), []);
   const cases = [
     [[ok, ok], /expected 1 days/],
     [{ days: [ok] }, /expected 1 days/],
@@ -72,8 +90,19 @@ test('validateSkeleton catches each kind of bad AI output', () => {
     [[{ ...ok, dinner: { recipeId: 'chickpea-curry', servings: 9 } }], /out of range/],
     [[{ ...ok, dinner: { recipeId: 'chickpea-curry', servings: Number.NaN } }], /out of range/],
     [[{ breakfast: ok.breakfast, lunch: ok.lunch }], /dinner: missing/],
+    [[all(0.5)], /655 kcal is below the 1200 kcal floor/],
+    [[all(3)], /3930 kcal is not within 10% of the 1310 kcal target/],
+    [[all(1.25)], /not within 10%/],
   ];
-  for (const [skeleton, pattern] of cases) assert.match(validateSkeleton(skeleton, p).join('\n'), pattern);
+  for (const [skeleton, pattern] of cases) assert.match(validateSkeleton(skeleton, p, t).join('\n'), pattern);
+  // Even a plan that matches its target is rejected below the floor.
+  assert.match(validateSkeleton([all(0.5)], p, { kcal: 655 }).join(), /below the 1200 kcal floor/);
+});
+
+test('fitServings never ends below the floor', () => {
+  const kcals = [333, 333, 333];
+  const s = fitServings(kcals, 1200, 1200);
+  assert.ok(kcals.reduce((sum, k, i) => sum + k * s[i], 0) >= 1200);
 });
 
 test('fitServings lands near target within serving bounds', () => {
