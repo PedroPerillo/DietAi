@@ -283,6 +283,23 @@ test('swapping a meal that fed leftovers keeps those later meals cooked', () => 
   assert.ok(laterCook.cookItems.length > 0, 'its ingredients are now bought for that day');
 });
 
+test('eating out with unknown calories does not count as missing the targets', () => {
+  const p = profile({ days: 7 });
+  const plan = planFor(p);
+  const next = applyMealChange(plan, 0, 'dinner', { slot: 'dinner', kind: 'eatout', eatout: { name: 'Pizza', cost: 9 } });
+  const h = hydratePlan(next, p);
+  assert.deepEqual(h.deviations, []);
+  assert.ok(Math.abs(h.average.kcal - plan.targets.kcal) < plan.targets.kcal * 0.05, 'average uses the fully known days');
+});
+
+test('packed perishable food with no fridge where it is eaten asks for an ice pack', () => {
+  const p = profile({ days: 7, routine: { 1: { meals: { lunch: { where: 'carry', fridge: false, microwave: false } } } } });
+  const lunch = hydratePlan(planFor(p), p).days[1].meals.find((m) => m.slot === 'lunch');
+  assert.equal(lunch.needsIcePack, RECIPES_BY_ID[lunch.recipeId].perishable);
+  const home = hydratePlan(planFor(p), p).days[2].meals.find((m) => m.slot === 'lunch');
+  assert.equal(home.needsIcePack, false);
+});
+
 test('a former leftover that no longer fits its slot is flagged', () => {
   // Tuesday lunch: 10 minutes, packed, with a microwave at work: a reheated leftover fits, cooking fresh doesn't.
   const p = profile({ days: 7, routine: { 1: { meals: { lunch: { minutes: 10, where: 'carry', fridge: true, microwave: true } } } } });

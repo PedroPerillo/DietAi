@@ -364,8 +364,11 @@ export function hydratePlan(plan, profile) {
     const totals = meals.reduce((acc, m) => addNut(acc, m.nutrition), ZERO);
     return { ...day, index: d, label: dayLabel(day.date), longLabel: dayLabel(day.date, { long: true }), context: ctx, meals, totals };
   });
-  const avg = Object.fromEntries(TARGET_KEYS.map((k) => [k, Math.round(days.reduce((s, x) => s + x.totals[k], 0) / Math.max(1, days.length))]));
-  return { ...plan, days, average: avg, deviations: deviations(avg, t) };
+  // Days with a meal of unknown nutrition (eating out, calories not entered) would read as
+  // falling short, so averages and deviations use only fully known days.
+  const known = days.filter((x) => x.meals.every((m) => m.nutritionKnown));
+  const avg = Object.fromEntries(TARGET_KEYS.map((k) => [k, Math.round(known.reduce((s, x) => s + x.totals[k], 0) / Math.max(1, known.length))]));
+  return { ...plan, days, average: avg, deviations: known.length ? deviations(avg, t) : [] };
 }
 
 function hydrateMeal(m, ctx, prefs) {
@@ -373,14 +376,14 @@ function hydrateMeal(m, ctx, prefs) {
   if (m.kind === 'eatout') {
     const e = m.eatout;
     const nutrition = { kcal: Math.round(e.kcal ?? 0), protein: round1(e.protein ?? 0), carbs: round1(e.carbs ?? 0), fat: round1(e.fat ?? 0) };
-    return { ...m, name: e.name, nutrition, nutritionKnown: e.kcal != null, cookItems: [], eatenItems: [], cost: money(e.cost ?? 0), minutes: 0, context: sc, conflicts: [], tags: [] };
+    return { ...m, name: e.name, nutrition, nutritionKnown: e.kcal != null, cookItems: [], eatenItems: [], cost: money(e.cost ?? 0), minutes: 0, context: sc, conflicts: [], needsIcePack: false, tags: [] };
   }
   const recipe = getRecipe(m.recipeId);
   const eatenItems = portionIngredients(recipe, m.servings);
   const extra = (m.packFor ?? []).reduce((s, p) => s + p.servings, 0);
   // Leftover meals were cooked earlier; their ingredients are bought with the cook meal.
   const cookItems = m.kind === 'leftover' ? [] : portionIngredients(recipe, m.servings + extra);
-  const { minutes, hard } = contextIssues(recipe, sc, prefs, { leftover: m.kind === 'leftover' });
+  const { minutes, hard, soft } = contextIssues(recipe, sc, prefs, { leftover: m.kind === 'leftover' });
   return {
     ...m,
     name: recipe.name,
@@ -395,6 +398,8 @@ function hydrateMeal(m, ctx, prefs) {
     // Rules this meal breaks for its slot (e.g. it was a leftover until the meal that fed it
     // changed, and cooking it fresh takes longer than the time you have). The UI flags these.
     conflicts: [...new Set(hard)].filter((h) => h !== 'variety'),
+    // Packed perishable food with no fridge where it's eaten: fine with an ice pack.
+    needsIcePack: soft.includes('ice-pack'),
     tags: recipeTags(recipe),
   };
 }

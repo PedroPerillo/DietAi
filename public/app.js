@@ -1,5 +1,5 @@
 import { hydratePlan, grocerySummary, alternativesFor, applyMealChange, CHANGE_REASONS } from './shared/engine.mjs';
-import { INGREDIENTS, storageTips } from './shared/catalog.mjs';
+import { INGREDIENTS, getRecipe, storageTips } from './shared/catalog.mjs';
 
 const STORAGE_KEY = 'fitbite:v1';
 const $ = (sel) => document.querySelector(sel);
@@ -58,7 +58,8 @@ const cap = (t) => t[0].toUpperCase() + t.slice(1);
 // state.result is the server's { profile, plan, source, summary, warning }. Groceries:
 // have = ingredient ids you already have enough of; bought = { id: packs } already bought.
 // changes logs every "my day changed" swap (what you actually ate), for learning later.
-const EMPTY_STATE = { result: null, have: [], bought: {}, changes: [], day: 0, form: null };
+// v: storage format version (2 = shared-engine plans), so future migrations are explicit.
+const EMPTY_STATE = { v: 2, result: null, have: [], bought: {}, changes: [], day: 0, form: null };
 let state = { ...EMPTY_STATE };
 let outdatedPlan = false; // a plan saved by an older FitBite version was dropped on load
 let config;
@@ -77,9 +78,9 @@ function loadState() {
     }
     const saved = JSON.parse(localStorage.getItem(storageKey()));
     if (!saved) return;
-    // Plans from before the shared engine have no dates or meal kinds; keep the answers so
-    // rebuilding is one tap, but drop the plan itself.
-    if (!saved.result?.plan?.days?.[0]?.date || !saved.result.plan.days[0].meals?.[0]?.kind) {
+    // Plans from an older version (no dates or meal kinds) or naming a recipe the catalog no
+    // longer has can't be shown; keep the answers so rebuilding is one tap, drop the plan.
+    if (saved.result && !planUsable(saved.result)) {
       outdatedPlan = Boolean(saved.result);
       state = { ...EMPTY_STATE, form: saved.form ?? null };
       return;
@@ -88,6 +89,18 @@ function loadState() {
     delete state.owned;
   } catch {
     localStorage.removeItem(storageKey());
+  }
+}
+
+function planUsable(result) {
+  const days = result?.plan?.days;
+  if (!Array.isArray(days) || !days[0]?.date || !days[0].meals?.[0]?.kind) return false;
+  if (days.some((d) => d.meals.some((m) => m.kind !== 'eatout' && !getRecipe(m.recipeId)))) return false;
+  try {
+    hydratePlan(result.plan, result.profile);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -523,6 +536,7 @@ function renderHome() {
 function mealNotes(plan, m) {
   const notes = [];
   if (m.context.where === 'carry') notes.push(`Take-away${m.context.microwave ? '' : ', no microwave'}`);
+  if (m.needsIcePack) notes.push('Pack it with an ice pack');
   if (m.kind === 'leftover') {
     const src = plan.days[m.leftoverOf.day];
     notes.push(`Leftovers from ${src?.label ?? 'earlier'} ${m.leftoverOf.slot}`);
@@ -535,7 +549,7 @@ function mealNotes(plan, m) {
 function mealRow(plan, dayIdx, m) {
   const meta = m.kind === 'eatout'
     ? [m.nutritionKnown && `${fmtNum(m.nutrition.kcal)} kcal`, m.cost && `about ${fmtMoney(m.cost)}`]
-    : [`${fmtNum(m.nutrition.kcal)} kcal`, `${Math.round(m.nutrition.protein)} g protein`, `${m.minutes} min`, m.servings !== 1 && `×${fmtAmount(m.servings)} portion`];
+    : [`${fmtNum(m.nutrition.kcal)} kcal`, `${Math.round(m.nutrition.protein)} g protein`, m.minutes ? `${m.minutes} min` : 'ready to eat', m.servings !== 1 && `×${fmtAmount(m.servings)} portion`];
   const notes = mealNotes(plan, m);
   return el('article', { class: 'meal' },
     el('button', { type: 'button', class: 'meal-open', 'aria-haspopup': 'dialog', onclick: (e) => openMeal(dayIdx, m.slot, e.currentTarget) },
@@ -676,6 +690,12 @@ function pickMissing(dayIdx, slot, m, opener) {
   });
 }
 
+const NOTHING_FITS = {
+  missing: 'No recipe without that ingredient fits your diet and routine for this meal. Try "I want another option", or log that you\'re eating out.',
+  other: "No other recipe fits your diet and routine for this meal. You can log that you're eating out instead.",
+  time: 'No recipe fits that much time along with your diet and routine. Try "I want another option", or log that you\'re eating out.',
+};
+
 function showAlternatives(dayIdx, slot, m, reason, ingredientId, opener) {
   const r = state.result;
   const alts = alternativesFor(r.plan, r.profile, groceryState(), dayIdx, slot, reason, { ingredientId });
@@ -684,7 +704,7 @@ function showAlternatives(dayIdx, slot, m, reason, ingredientId, opener) {
   if (!alts.length) {
     return openPanel({
       eyebrow: CHANGE_REASONS[reason].label, title: 'Nothing fits that', opener,
-      body: el('p', { class: 'lede' }, `No recipe fits ${reason === 'missing' ? 'without that ingredient' : 'that much time'} along with your diet and routine. Try "I want another option", or log that you're eating out.`),
+      body: el('p', { class: 'lede' }, NOTHING_FITS[reason] ?? NOTHING_FITS.time),
       foot: [back],
     });
   }
