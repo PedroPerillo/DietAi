@@ -282,8 +282,15 @@ legend small { font-weight: 400; color: var(--muted); }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
 
-/* ---------- short screens (phone in landscape) ---------- */
+/* ---------- short screens (landscape phones, high zoom) ---------- */
+/* Keep the content area usable when height is scarce: the header scrolls away, the
+   checkout bar sits in the page after the list, and the tab bar shrinks to icons. */
 @media (max-height: 520px) {
+  :root { --nav-h: 56px; }
+  .appbar { position: static; }
+  main { padding-top: 16px; }
+  #view-groceries { padding-bottom: 0; }
+  .checkoutbar { position: static; transform: none; width: auto; min-height: 0; box-shadow: none; }
   .sheet { padding-top: 6px; }
   .handle { margin-bottom: 6px; }
   .progress { margin: 6px 0 10px; }
@@ -291,6 +298,13 @@ legend small { font-weight: 400; color: var(--muted); }
   .sheet > .lede { margin: 2px 0 8px; font-size: 14px; }
   .sheet-foot { padding-top: 10px; }
   .btn-primary, .btn-outline { min-height: 46px; }
+}
+/* Icon-only tab bar on short screens while it's at the bottom (labels stay for screen readers). */
+@media (max-height: 520px) and (max-width: 1023px) {
+  .tab .tab-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .tabbar { padding-bottom: var(--safe-b); }
+  .fab { width: 48px; height: 48px; margin-top: -12px; }
+  .fab svg { width: 22px; height: 22px; }
 }
 
 /* ---------- tablet: 768px and up ---------- */
@@ -322,6 +336,7 @@ legend small { font-weight: 400; color: var(--muted); }
 }
 @media (min-width: 768px) and (max-height: 520px) {
   .sheet-backdrop { padding: 8px 24px; }
+  .checkoutbar { width: auto; } /* in the page flow here, so match the panel width */
 }
 
 /* ---------- desktop: 1024px and up ---------- */
@@ -351,4 +366,10 @@ legend small { font-weight: 400; color: var(--muted); }
   .checkout-panel .field { max-width: none; }
   .checkoutbar { position: static; transform: none; width: auto; min-height: 0; flex-direction: column; align-items: stretch; gap: 14px; padding: 18px; box-shadow: none; }
   .checkoutbar .btn { width: 100%; }
+}
+
+/* Short desktop windows: the header scrolls away, so the sticky panel can sit near the top.
+   (After the desktop block so it wins.) */
+@media (min-width: 1024px) and (max-height: 520px) {
+  .checkout-panel { top: 16px; }
 }
