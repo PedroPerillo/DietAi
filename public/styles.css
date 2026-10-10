@@ -291,7 +291,6 @@ legend small { font-weight: 400; color: var(--muted); }
   main { padding-top: 16px; }
   #view-groceries { padding-bottom: 0; }
   .checkoutbar { position: static; transform: none; width: auto; min-height: 0; box-shadow: none; }
-  .checkout-panel { top: 16px; } /* desktop: header no longer pinned above it */
   .sheet { padding-top: 6px; }
   .handle { margin-bottom: 6px; }
   .progress { margin: 6px 0 10px; }
@@ -337,6 +336,7 @@ legend small { font-weight: 400; color: var(--muted); }
 }
 @media (min-width: 768px) and (max-height: 520px) {
   .sheet-backdrop { padding: 8px 24px; }
+  .checkoutbar { width: auto; } /* in the page flow here, so match the panel width */
 }
 
 /* ---------- desktop: 1024px and up ---------- */
@@ -366,4 +366,10 @@ legend small { font-weight: 400; color: var(--muted); }
   .checkout-panel .field { max-width: none; }
   .checkoutbar { position: static; transform: none; width: auto; min-height: 0; flex-direction: column; align-items: stretch; gap: 14px; padding: 18px; box-shadow: none; }
   .checkoutbar .btn { width: 100%; }
+}
+
+/* Short desktop windows: the header scrolls away, so the sticky panel can sit near the top.
+   (After the desktop block so it wins.) */
+@media (min-width: 1024px) and (max-height: 520px) {
+  .checkout-panel { top: 16px; }
 }
