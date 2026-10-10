@@ -579,6 +579,14 @@ function onSignedIn(id) {
   loadState();
   render();
   showView('home');
+  promptFirstPlan();
+}
+
+// New here (no saved plan for this user on this device): open the plan wizard right away
+// instead of leaving them on an empty home screen. Closing it leaves "Build my plan" there.
+function promptFirstPlan() {
+  if (state.result || !$('#wizard').hidden) return;
+  openWizard();
 }
 
 // ================= App shell =================
@@ -654,6 +662,7 @@ async function init() {
   loadState();
   render();
   showView('home');
+  promptFirstPlan();
 }
 
 init();
