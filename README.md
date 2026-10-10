@@ -16,6 +16,8 @@ Copy `.env.example` to `.env` to configure it. It works with no configuration: p
 
 | Variable | Effect |
 |---|---|
+| `DEEPSEEK_API_KEY` | Plans are built by DeepSeek (`deepseek-chat`, JSON mode, schema in the prompt), validated server-side, with the built-in planner as fallback. Takes precedence over Groq when both are set |
+| `DEEPSEEK_MODEL` | Optional. Another DeepSeek chat model |
 | `GROQ_API_KEY` | Plans are built by Groq (`openai/gpt-oss-120b`, strict JSON-schema output), validated server-side, with the built-in planner as fallback. Works on Groq's free plan |
 | `GROQ_MODEL` | Optional. Another Groq model with strict structured outputs, e.g. `openai/gpt-oss-20b` |
 | `INSTACART_API_KEY` | Enables "Send to Instacart", which creates a shopping-list page link |

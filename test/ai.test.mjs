@@ -117,6 +117,27 @@ test('waits out a short rate limit once, but not a long one', async () => {
   }
 });
 
+test('DeepSeek gets JSON mode with the schema in the prompt, and no strict-mode parameters', async () => {
+  process.env.DEEPSEEK_API_KEY = 'ds-key';
+  process.env.DEEPSEEK_BASE_URL = process.env.GROQ_BASE_URL;
+  try {
+    reply = () => message(JSON.stringify({ summary: 'ok', days: { d0: day } }));
+    const r = await aiSkeleton(profile, targets);
+    assert.deepEqual(r.choices[0], day);
+    const b = lastRequest.body;
+    assert.equal(lastRequest.headers.authorization, 'Bearer ds-key');
+    assert.equal(b.model, 'deepseek-chat');
+    assert.deepEqual(b.response_format, { type: 'json_object' });
+    assert.equal(b.max_tokens, 4096);
+    for (const k of ['reasoning_effort', 'include_reasoning', 'max_completion_tokens']) assert.equal(b[k], undefined, k);
+    assert.match(b.messages[0].content, /JSON schema exactly/);
+    assert.match(b.messages[0].content, new RegExp(day.breakfast ?? Object.values(day)[0]));
+  } finally {
+    delete process.env.DEEPSEEK_API_KEY;
+    delete process.env.DEEPSEEK_BASE_URL;
+  }
+});
+
 // ---- through the HTTP server, with the fake Groq behind it ----
 const listen = async (opts) => {
   const s = createServer(opts).listen(0);
