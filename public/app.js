@@ -167,7 +167,8 @@ function renderGroceries() {
     ),
   );
   $('#grocery-total').textContent = fmtMoney(buying().reduce((s, g) => s + g.estPrice, 0));
-  $('#label-warning').hidden = !state.result.profile?.allergies?.length;
+  const { allergies = [], diet = 'omnivore' } = state.result.profile ?? {};
+  $('#label-warning').hidden = !allergies.length && diet === 'omnivore';
 }
 
 let checkingOut = false;

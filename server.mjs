@@ -118,11 +118,13 @@ const makeRoutes = ({ checkRateLimit }) => ({
 });
 
 // Optional hints for store-side product filters. They can only narrow product matches,
-// so a missing or odd value just means no filter.
+// so a missing or odd value just means no filter. Instacart has no vegetarian or
+// pescatarian filter, so any non-omnivore diet uses VEGAN on the few labelRisk items
+// (e.g. shrimp paste in curry paste, lard in tortillas).
 function parseDietary(d) {
   return {
     glutenFree: Array.isArray(d?.allergies) && d.allergies.includes('gluten'),
-    vegan: d?.diet === 'vegan',
+    vegan: ['vegan', 'vegetarian', 'pescatarian'].includes(d?.diet),
   };
 }
 
