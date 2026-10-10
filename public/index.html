@@ -27,6 +27,9 @@
         <button type="button" class="tab" data-view="groceries" disabled>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h2l2.5 11h11L21 8H6.5" /><circle cx="9" cy="19.5" r="1.5" /><circle cx="17" cy="19.5" r="1.5" /></svg>Groceries
         </button>
+        <button type="button" class="tab" data-view="progress" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h16M6 16V9M11 16V5M16 16v-7" /></svg>Progress
+        </button>
         <div class="fab-wrap">
           <button type="button" class="fab" aria-label="New plan" data-open-wizard>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg><span class="fab-label">New plan</span>
@@ -49,6 +52,8 @@
           <h1 class="display">Plan your week</h1>
           <p class="lede">Tell us a little about you. FitBite builds a week of meals around your goal and fills your grocery cart.</p>
           <button type="button" class="btn btn-primary btn-block" data-open-wizard>Build my plan</button>
+          <button type="button" class="btn btn-outline btn-block" id="demo-btn">Try the demo student</button>
+          <p class="fine">The demo uses a fictional student profile, pantry and routine. Prices and nutrition are estimates.</p>
         </div>
 
         <div id="home-plan" hidden>
@@ -66,6 +71,8 @@
           <div id="plan-chips" class="chips-static"></div>
           <div id="plan-notices"></div>
           <p id="plan-summary" class="summary" hidden></p>
+          <div id="budget-strip" class="budget-strip" hidden></div>
+          <div id="toast" class="toast" role="status" hidden></div>
 
           <section class="totals" aria-label="Day totals">
             <div class="ring">
@@ -100,6 +107,8 @@
         <h1 id="h-groceries" class="display">Groceries</h1>
         <p id="groceries-sub" class="lede"></p>
         <p id="label-warning" class="notice" hidden>Recipes fit your allergies and diet, but the store picks the actual brand, so always check product labels before buying.</p>
+        <div id="budget-panel" class="budget-panel"></div>
+        <p class="fine">Tap <b>Have</b> if it is already in your kitchen, <b>Bought</b> once you have purchased it. Prices are estimates from a demo price list.</p>
         <div class="groceries-layout">
         <div id="grocery-list"></div>
         <aside class="checkout-panel" aria-label="Checkout">
@@ -107,11 +116,18 @@
         <p class="fine">Prices are estimates. You review and pay on the store's site.</p>
         <p id="checkout-error" class="error" role="alert" hidden></p>
         <div class="checkoutbar">
-          <div class="total"><small id="total-label">Estimated</small><strong id="grocery-total">$0.00</strong></div>
+          <div class="total"><small id="total-label">Estimated · to buy</small><strong id="grocery-total">$0.00</strong></div>
           <button id="checkout" type="button" class="btn btn-gold">Send to cart</button>
         </div>
         </aside>
         </div>
+      </section>
+      <!-- ===== Progress ===== -->
+      <section id="view-progress" class="view" hidden aria-labelledby="h-progress">
+        <p class="eyebrow">This week</p>
+        <h1 id="h-progress" class="display">Progress</h1>
+        <p class="lede">Log each meal from its recipe card. Changing the plan is normal; this just helps next week fit you better.</p>
+        <div id="progress-body"></div>
       </section>
     </main>
 
@@ -230,6 +246,26 @@
             <label for="snacks" id="snack-label">Daily snack</label>
             <input id="snacks" name="snacks" type="checkbox" role="switch" class="switch" checked />
           </div>
+          <label class="field">Weekly grocery budget ($) <input name="budgetWeekly" type="number" inputmode="decimal" min="10" max="2000" placeholder="e.g. 55" /></label>
+          <fieldset><legend>Equipment I can use</legend><div class="chips">
+            <label><input type="checkbox" name="equipment" value="stove" checked /><span>Stove</span></label>
+            <label><input type="checkbox" name="equipment" value="oven" checked /><span>Oven</span></label>
+            <label><input type="checkbox" name="equipment" value="microwave" checked /><span>Microwave</span></label>
+            <label><input type="checkbox" name="equipment" value="airfryer" /><span>Air fryer</span></label>
+          </div></fieldset>
+          <label class="field">In the kitchen I am
+            <select name="skill"><option value="beginner">A beginner</option><option value="comfortable" selected>Comfortable</option><option value="confident">Confident</option></select>
+          </label>
+          <label class="field">I prefer
+            <select name="stylePref"><option value="mixed" selected>A mix</option><option value="quick">Quick meals</option><option value="homemade">Home-cooked meals</option><option value="bought">Bought, ready-to-eat</option></select>
+          </label>
+          <fieldset><legend>Days I can cook ahead</legend><div class="chips" id="prep-days"></div></fieldset>
+          <fieldset><legend>Busy days <small>10-minute lunch away from home, no microwave</small></legend><div class="chips" id="busy-days"></div></fieldset>
+          <fieldset><legend>Already in my pantry <small>optional</small></legend>
+            <input id="pantry-search" class="field-input" type="search" placeholder="Search ingredients, e.g. rice" autocomplete="off" />
+            <div id="pantry-results" class="chips"></div>
+            <div id="pantry-list" class="pantry-list"></div>
+          </fieldset>
           <label class="field">Anything else? <textarea name="notes" rows="2" maxlength="500" placeholder="e.g. quick lunches, I meal-prep on Sundays"></textarea></label>
           <div class="plan-uses"><span class="eyebrow">Your plan will use</span><div id="plan-uses"></div></div>
         </div>
@@ -248,6 +284,15 @@
       </div>
     </section>
   </div>
-  <script type="module" src="/app.js"></script>
+  <!-- ===== Recipe sheet ===== -->
+  <div id="recipe-sheet" class="sheet-backdrop" hidden>
+    <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="rs-title">
+      <div class="handle" aria-hidden="true"></div>
+      <div class="sheet-head"><span id="rs-slot" class="eyebrow"></span><button type="button" class="icon-btn" data-close-sheet aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button></div>
+      <h2 id="rs-title" class="display" tabindex="-1"></h2>
+      <div id="rs-body" class="sheet-body"></div>
+    </section>
+  </div>
+  <script type="module" src="/js/app.js"></script>
 </body>
 </html>

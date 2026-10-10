@@ -1,4 +1,7 @@
-const STORAGE_KEY = 'fitbite:v1';
+import * as E from './engine.js';
+import { INGREDIENTS } from './catalog.js';
+const STORAGE_KEY = 'fitbite:v2';
+const LEGACY_KEY = 'fitbite:v1';
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 const fmtMoney = (n) => `$${n.toFixed(2)}`;
@@ -9,7 +12,7 @@ const ACTIVITY_LABEL = { sedentary: 'Mostly sitting', light: 'Light activity', m
 const ALLERGEN_LABEL = { nuts: 'Tree nuts', egg: 'Eggs' };
 const LEAF = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19c0-8 5-13 14-14-1 9-6 14-14 14z"/><path d="M5 19l8-8"/></svg>';
 const PREVIEW_ITEMS = 3; // items shown per aisle before "Show N more"
-const AISLE_ORDER = ['Produce', 'Meat & Seafood', 'Dairy', 'Bakery', 'Deli', 'Frozen', 'Pantry'];
+const AISLE_ORDER = ['Produce', 'Meat & Seafood', 'Dairy', 'Bakery', 'Deli', 'Frozen', 'Pantry', 'Ready to eat'];
 
 // Small DOM helper so nothing from the server (incl. AI text) is ever parsed as HTML.
 function el(tag, attrs = {}, ...children) {
@@ -22,13 +25,14 @@ function el(tag, attrs = {}, ...children) {
   node.append(...children.flat().filter((c) => c != null && c !== false));
   return node;
 }
+const fill = (node, ...children) => node.replaceChildren(...children.flat().filter((c) => c != null && c !== false));
 const svgIcon = (markup) => {
   const t = document.createElement('template');
   t.innerHTML = markup; // static constant markup only
   return t.content.firstChild;
 };
 
-const EMPTY_STATE = { result: null, owned: [], day: 0, form: null };
+const EMPTY_STATE = { result: null, owned: [], bought: [], inventory: [], undo: [], log: {}, day: 0, form: null };
 let state = { ...EMPTY_STATE };
 let config;
 let userId = null; // Clerk user id when sign-in is on; plans are stored per user on this device
@@ -44,7 +48,7 @@ function loadState() {
       localStorage.removeItem(STORAGE_KEY);
     }
     const saved = JSON.parse(localStorage.getItem(storageKey()));
-    if (saved?.result?.plan?.days && Array.isArray(saved.owned)) state = { ...EMPTY_STATE, ...saved };
+    if (saved?.result?.plan?.days && Array.isArray(saved.owned) && saved.result.skeleton) state = { ...EMPTY_STATE, ...saved };
   } catch {
     localStorage.removeItem(storageKey());
   }
@@ -130,6 +134,7 @@ function readForm() {
     sex: get('sex'), units: get('units'), age: get('age'), weightLb: get('weightLb'), weightKg: get('weightKg'),
     heightFt: get('heightFt'), heightIn: get('heightIn'), heightCm: get('heightCm'), goal: get('goal'), activity: get('activity'),
     diet: get('diet'), allergies: f.getAll('allergies'), dislikes: get('dislikes'), days: Number(get('days')), snacks: form().snacks.checked, notes: get('notes'),
+    budgetWeekly: get('budgetWeekly'), equipment: f.getAll('equipment'), skill: get('skill'), stylePref: get('stylePref'), prepDays: f.getAll('prepDays'), busyDays: f.getAll('busyDays'), inventory: pantry.slice(),
   };
 }
 
@@ -140,10 +145,15 @@ function writeForm(v) {
     const r = fm.querySelector(`input[name="${name}"][value="${CSS.escape(String(v[name]))}"]`);
     if (r) r.checked = true;
   }
-  for (const name of ['age', 'weightLb', 'weightKg', 'heightFt', 'heightIn', 'heightCm', 'activity', 'dislikes', 'notes']) {
+  for (const name of ['age', 'weightLb', 'weightKg', 'heightFt', 'heightIn', 'heightCm', 'activity', 'dislikes', 'notes', 'budgetWeekly', 'skill', 'stylePref']) {
     if (v[name] != null && fm.elements[name]) fm.elements[name].value = v[name];
   }
   fm.querySelectorAll('input[name="allergies"]').forEach((c) => (c.checked = (v.allergies ?? []).includes(c.value)));
+  fm.querySelectorAll('input[name="equipment"]').forEach((c) => (c.checked = (v.equipment ?? ['stove', 'oven', 'microwave']).includes(c.value)));
+  fm.querySelectorAll('input[name="prepDays"]').forEach((c) => (c.checked = (v.prepDays ?? []).includes(c.value)));
+  fm.querySelectorAll('input[name="busyDays"]').forEach((c) => (c.checked = (v.busyDays ?? []).includes(c.value)));
+  pantry = (v.inventory ?? []).slice();
+  renderPantry();
   fm.snacks.checked = v.snacks !== false;
   setDays(v.days ?? 7);
   toggleUnits();
@@ -157,9 +167,32 @@ function toProfile(v) {
     sex: v.sex, age: n(v.age),
     heightCm: imperial ? Math.round((n(v.heightFt) * 12 + n(v.heightIn)) * 2.54) : n(v.heightCm),
     weightKg: imperial ? Math.round(n(v.weightLb) * 0.4536 * 10) / 10 : n(v.weightKg),
-    activity: v.activity, goal: v.goal, diet: v.diet, allergies: v.allergies, dislikes: v.dislikes ?? '',
+    activity: v.activity, goal: v.goal, diet: v.diet, allergies: v.allergies, dislikes: (v.dislikes ?? '').split(',').map((s) => s.trim()).filter(Boolean),
     days: v.days, snacks: v.snacks, notes: v.notes ?? '',
+    student: { budgetWeekly: v.budgetWeekly ? n(v.budgetWeekly) : null, equipment: v.equipment?.length ? v.equipment : [], skill: v.skill ?? 'comfortable', stylePref: v.stylePref ?? 'mixed', prepDays: v.prepDays ?? [] },
+    inventory: v.inventory ?? [],
+    week: E.buildWeek({ startDate: new Date().toISOString().slice(0, 10), days: v.days, mealsPerDay: v.snacks ? 4 : 3, busyDays: v.busyDays ?? [] }),
   };
+}
+
+// ---- pantry picker ----
+let pantry = [];
+function renderPantry() {
+  const list = $('#pantry-list');
+  if (!list) return;
+  lisfill(t, ...pantry.map((it) => el('div', { class: 'pantry-row' },
+    el('span', {}, INGREDIENTS[it.ingredientId].name),
+    el('input', { type: 'number', min: '1', value: it.quantity, 'aria-label': `Quantity of ${INGREDIENTS[it.ingredientId].name} in ${INGREDIENTS[it.ingredientId].unit}`, oninput: (e) => { it.quantity = Number(e.target.value) || 1; } }),
+    el('small', {}, INGREDIENTS[it.ingredientId].unit),
+    el('button', { type: 'button', class: 'icon-btn', 'aria-label': `Remove ${INGREDIENTS[it.ingredientId].name}`, onclick: () => { pantry = pantry.filter((p) => p !== it); renderPantry(); } }, '×'),
+  )));
+}
+function searchPantry(q) {
+  const res = $('#pantry-results');
+  q = q.trim().toLowerCase();
+  if (!q) return res.replaceChildren();
+  const hits = Object.entries(INGREDIENTS).filter(([id, i]) => i.name.toLowerCase().includes(q) && !pantry.some((p) => p.ingredientId === id)).slice(0, 6);
+  res.replaceChildren(...hits.map(([id, i]) => el('button', { type: 'button', class: 'chip-btn', onclick: () => { pantry.push({ ingredientId: id, quantity: i.unit === 'each' || i.unit === 'can' || i.unit === 'slice' ? 2 : 200 }); $('#pantry-search').value = ''; res.replaceChildren(); renderPantry(); } }, `+ ${i.name}`)));
 }
 
 function validateStep(n, v) {
@@ -258,9 +291,7 @@ function setLoading(on) {
   $('#wz-sub').hidden = on;
   $('#wz-title').hidden = on;
   $('#wz-step').textContent = on ? 'Building your plan' : `Step ${step} of 4`;
-  if (on) $('#wz-loading-sub').textContent = config?.ai
-    ? 'FitBite is choosing your meals. This can take up to a minute.'
-    : 'Matching recipes to your goal and diet.';
+  if (on) $('#wz-loading-sub').textContent = 'Matching recipes to your goal, routine, pantry and budget.';
 }
 
 async function onNext() {
@@ -268,15 +299,18 @@ async function onNext() {
   const problem = validateStep(step, v);
   if (problem) return showError($('#form-error'), problem);
   if (step < 4) return showStep(step + 1);
+  if (v.equipment.length === 0 && v.stylePref !== 'bought') { showError($('#form-error'), 'Pick at least one piece of equipment, or choose "Bought, ready-to-eat" meals.'); return; }
   if (building) return; // double-tap guard
   building = new AbortController();
   setLoading(true);
   try {
     const { signal } = building;
-    const result = await api('/api/plan', toProfile(v), { signal });
+    await new Promise((r) => setTimeout(r, 400)); // let the loading state paint
+    const result = E.generate(toProfile(v));
     if (signal.aborted) return; // closed after the response arrived: keep the previous plan
-    if (!result?.plan?.days?.length) throw new Error('The server sent an unexpected response. Please try again.');
-    state = { result, owned: [], day: 0, form: v };
+    result.groceries = E.groceries(result.plan, { inventory: result.profile.inventory, budget: result.profile.student.budgetWeekly });
+    result.warning = 'Plan from the built-in planner (demo). Nutrition and prices are estimates.';
+    state = { ...EMPTY_STATE, result, day: 0, form: v, inventory: result.profile.inventory.slice() };
     save();
     building = null;
     closeWizard({ restoreFocus: false });
@@ -309,12 +343,14 @@ function renderHome() {
   const d = plan.days[day];
 
   $('#greeting').textContent = greeting();
-  $('#plan-chips').replaceChildren(
-    ...[GOAL_LABEL[profile.goal], `${fmtNum(t.kcal)} kcal / day`, DIET_LABEL[profile.diet], `${plan.days.length} day${plan.days.length > 1 ? 's' : ''}${profile.snacks ? ' + snack' : ''}`]
+  fill($('#plan-chips'), 
+    ...[GOAL_LABEL[profile.goal], `${fmtNum(t.kcal)} kcal / day`, DIET_LABEL[profile.diet], `${plan.days.length} day${plan.days.length > 1 ? 's' : ''}${profile.snacks ? ' + snack' : ''}`, profile.student?.budgetWeekly ? `$${profile.student.budgetWeekly}/week budget` : null].filter(Boolean)
       .map((text) => el('span', {}, text)),
   );
   const notices = [];
   if (r.warning) notices.push(r.warning);
+  for (const nt of r.notes ?? []) notices.push(nt.text);
+  for (const dv of d.deviations ?? []) notices.push(dv);
   if (t.floored) notices.push(`Your target was raised to the ${config?.minKcal ?? 1200} kcal/day safety minimum.`);
   $('#plan-notices').replaceChildren(...notices.map((n) => el('p', { class: 'notice', role: 'status' }, n)));
   $('#plan-summary').hidden = !r.summary;
@@ -345,7 +381,7 @@ function renderHome() {
     ...plan.days.map((pd, i) =>
       el('button', {
         type: 'button', class: 'day-btn', role: 'tab', 'aria-selected': String(i === day), 'aria-controls': 'meals', tabindex: i === day ? '0' : '-1',
-        'aria-label': `Day ${pd.day}`,
+        'aria-label': pd.label,
         onclick: () => selectDay(i),
         onkeydown: (e) => {
           const delta = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
@@ -353,22 +389,32 @@ function renderHome() {
           e.preventDefault();
           selectDay((i + delta + plan.days.length) % plan.days.length, true);
         },
-      }, el('small', {}, 'Day'), el('b', {}, String(pd.day))),
+      }, el('small', {}, pd.label.slice(0, 3)), el('b', {}, pd.date.slice(8))),
     ),
   );
 
-  $('#meals').setAttribute('aria-label', `Day ${d.day} meals`);
+  $('#meals').setAttribute('aria-label', `${d.label} meals`);
   $('#meals').replaceChildren(
-    ...d.meals.map((m) =>
-      el('article', { class: 'meal' },
+    ...d.meals.map((m) => {
+      const logged = state.log[`${d.index}:${m.slot}`];
+      const badges = [m.prepOn && `Prepped ${m.prepOn}`, m.context?.where === 'away' && 'To go', m.estimated && 'Estimated', logged && ({ followed: 'Logged ✓', alternative: 'Adapted ✓', skipped: 'Skipped' })[logged.status]].filter(Boolean);
+      return el('button', { type: 'button', class: 'meal meal-btn', onclick: () => openRecipe(d.index, m.slot) },
         el('span', { class: 'tile-icon' }, svgIcon(LEAF)),
         el('div', { class: 'meal-text' },
-          el('span', { class: 'meal-slot' }, m.slot),
+          el('span', { class: 'meal-slot' }, `${m.slot}${m.context ? ` · ${m.context.minutes} min` : ''}`),
           el('h3', { class: 'meal-name' }, m.name),
-          el('span', { class: 'meal-meta' }, [`${fmtNum(m.kcal)} kcal`, `${Math.round(m.protein)} g protein`, `${m.minutes} min`, m.servings !== 1 && `×${m.servings} portion`].filter(Boolean).join(' · ')),
+          el('span', { class: 'meal-meta' }, [`${fmtNum(m.kcal)} kcal`, `${Math.round(m.protein)} g protein`, `${m.effectiveMinutes ?? m.minutes} min`, `$${m.cost.toFixed(2)}`, m.servings !== 1 && `×${m.servings} portion`].filter(Boolean).join(' · ')),
+          badges.length ? el('span', { class: 'badges' }, ...badges.map((b) => el('span', { class: 'mini-badge' }, b))) : null,
         ),
-      ),
-    ),
+      );
+    }),
+  );
+  const bt = r.groceries.totals;
+  $('#budget-strip').hidden = false;
+  fill($('#budget-strip'), 
+    el('span', {}, `Groceries ~${fmtMoney(bt.purchase)}`),
+    bt.budget != null ? el('span', { class: bt.diff < 0 ? 'over' : 'ok' }, bt.diff < 0 ? `${fmtMoney(-bt.diff)} over budget` : `${fmtMoney(bt.diff)} under budget`) : null,
+    el('span', {}, `~${fmtMoney(bt.perMeal)} per meal`),
   );
   const buy = buying();
   $('#groceries-link-meta').textContent = `${buy.length} items · est. ${fmtMoney(sum(buy))}`;
@@ -382,13 +428,21 @@ function selectDay(i, focus = false) {
 }
 
 // ================= Groceries =================
-const buying = () => state.result.groceries.filter((g) => !state.owned.includes(g.ingredientId));
+function regroceries() {
+  const r = state.result;
+  r.groceries = E.groceries(r.plan, { inventory: state.inventory, have: state.owned, bought: state.bought, budget: r.profile.student.budgetWeekly });
+}
+const buying = () => state.result.groceries.lines.filter((g) => g.status === 'buy' && g.packs > 0);
 const sum = (items) => items.reduce((s, g) => s + g.estPrice, 0);
 const expanded = new Set();
 
 function qtyText(g) {
-  if (g.packSize === 1) return `${g.packs} ${g.unit === 'each' ? 'each' : g.unit + (g.packs > 1 ? 's' : '')}`;
-  return `${g.packs} × ${g.packSize} ${g.unit} · need ${+g.quantity.toFixed(2)} ${g.unit}`;
+  const inv = g.fromInventory ? ` · ${+g.fromInventory.toFixed(2)} ${g.unit} from pantry` : '';
+  if (g.status === 'have') return `need ${+g.need.toFixed(2)} ${g.unit} · you have it`;
+  if (g.packs === 0) return `need ${+g.need.toFixed(2)} ${g.unit}${inv} · covered`;
+  const left = g.leftover > 0 ? ` · ${+g.leftover.toFixed(1)} ${g.unit} left for next week` : '';
+  if (g.packSize === 1) return `${g.packs} ${g.unit === 'each' ? 'each' : g.unit + (g.packs > 1 ? 's' : '')}${inv}`;
+  return `${g.packs} × ${g.packSize} ${g.unit} · need ${+g.toBuy.toFixed(2)} ${g.unit}${inv}${left}`;
 }
 
 function renderGroceries() {
@@ -396,9 +450,23 @@ function renderGroceries() {
   if (!r) return;
   const groups = new Map();
   const rank = (c) => (AISLE_ORDER.includes(c) ? AISLE_ORDER.indexOf(c) : AISLE_ORDER.length);
-  for (const g of [...r.groceries].sort((a, b) => rank(a.category) - rank(b.category))) groups.set(g.category, [...(groups.get(g.category) ?? []), g]);
+  for (const g of [...r.groceries.lines].sort((a, b) => rank(a.category) - rank(b.category))) groups.set(g.category, [...(groups.get(g.category) ?? []), g]);
   const days = r.plan.days.length;
-  $('#groceries-sub').textContent = `${r.groceries.length} items for ${days} day${days > 1 ? 's' : ''}. Untick anything you already have.`;
+  const T = r.groceries.totals;
+  $('#groceries-sub').textContent = `${r.groceries.lines.length} ingredients for ${days} day${days > 1 ? 's' : ''}.`;
+  fill($('#budget-panel'), 
+    el('div', { class: 'budget-grid' },
+      el('div', {}, el('small', {}, 'To buy (whole packs)'), el('b', {}, fmtMoney(T.toBuy))),
+      el('div', {}, el('small', {}, 'Already bought'), el('b', {}, fmtMoney(T.spent))),
+      el('div', {}, el('small', {}, 'Budget'), el('b', {}, T.budget != null ? fmtMoney(T.budget) : '—')),
+      el('div', { class: T.diff != null && T.diff < 0 ? 'over' : 'ok' }, el('small', {}, 'Difference'), el('b', {}, T.diff != null ? (T.diff < 0 ? `−${fmtMoney(-T.diff)}` : `+${fmtMoney(T.diff)}`) : '—')),
+      el('div', {}, el('small', {}, 'Ingredients eaten this week'), el('b', {}, fmtMoney(T.consumed))),
+      el('div', {}, el('small', {}, 'Per meal'), el('b', {}, fmtMoney(T.perMeal))),
+      el('div', {}, el('small', {}, 'Leftover for next week'), el('b', {}, fmtMoney(T.leftoverValue))),
+      el('div', {}, el('small', {}, 'Eating out (logged)'), el('b', {}, fmtMoney(T.eatingOut))),
+    ),
+    T.budget != null ? el('div', { class: 'bar budget-bar', role: 'img', 'aria-label': `${fmtMoney(T.purchase)} of ${fmtMoney(T.budget)} budget` }, el('i', { style: `width:${Math.min(100, (T.purchase / T.budget) * 100).toFixed(0)}%;background:${T.diff < 0 ? '#9B2C1F' : '#90A63B'}` })) : null,
+  );
   const { allergies = [], diet = 'omnivore' } = r.profile ?? {};
   $('#label-warning').hidden = !allergies.length && diet === 'omnivore';
 
@@ -410,19 +478,17 @@ function renderGroceries() {
       return el('section', { class: 'aisle', 'aria-labelledby': id },
         el('div', { class: 'aisle-head' }, el('h2', { id }, category), el('small', {}, `${items.length} item${items.length > 1 ? 's' : ''}`)),
         shown.map((g) => {
-          const owned = state.owned.includes(g.ingredientId);
-          return el('label', { class: `item${owned ? ' off' : ''}` },
-            el('input', {
-              type: 'checkbox', checked: !owned, 'aria-label': `Buy ${g.name}`,
-              onchange: (e) => {
-                state.owned = e.target.checked ? state.owned.filter((x) => x !== g.ingredientId) : [...state.owned, g.ingredientId];
-                save();
-                renderGroceries();
-                $(`#grocery-list input[aria-label="Buy ${CSS.escape(g.name)}"]`)?.focus();
-              },
-            }),
+          const set = (status) => {
+            state.owned = state.owned.filter((x) => x !== g.ingredientId);
+            state.bought = state.bought.filter((x) => x !== g.ingredientId);
+            if (status === 'have') state.owned.push(g.ingredientId);
+            if (status === 'bought') state.bought.push(g.ingredientId);
+            regroceries(); save(); renderGroceries(); renderHome();
+          };
+          const tog = (status, label) => el('button', { type: 'button', class: `tog${g.status === status ? ' on' : ''}`, 'aria-pressed': String(g.status === status), onclick: () => set(g.status === status ? 'buy' : status) }, label);
+          return el('div', { class: `item${g.status !== 'buy' ? ' off' : ''}` },
             el('span', { class: 'item-text' }, el('span', { class: 'item-name' }, g.name), el('span', { class: 'item-qty' }, qtyText(g))),
-            el('span', { class: 'item-price' }, fmtMoney(g.estPrice)),
+            el('span', { class: 'item-right' }, el('span', { class: 'item-price' }, g.status === 'have' ? '—' : fmtMoney(g.packCost)), el('span', { class: 'togs' }, tog('have', 'Have'), tog('bought', 'Bought'))),
           );
         }),
         items.length > PREVIEW_ITEMS + 1 && el('button', {
@@ -433,7 +499,7 @@ function renderGroceries() {
     }),
   );
   const buy = buying();
-  $('#total-label').textContent = `Estimated · ${buy.length} item${buy.length === 1 ? '' : 's'}`;
+  $('#total-label').textContent = `Estimated · ${buy.length} item${buy.length === 1 ? '' : 's'} to buy`;
   $('#grocery-total').textContent = fmtMoney(sum(buy));
 }
 
@@ -452,7 +518,7 @@ async function onCheckout() {
   button.textContent = 'Sending…';
   try {
     const { diet, allergies } = state.result.profile ?? {};
-    const r = await api('/api/checkout', { provider: $('#provider').value, items: buy.map(({ ingredientId, quantity }) => ({ ingredientId, quantity })), dietary: { diet, allergies } }, { timeoutMs: 30_000 });
+    const r = await api('/api/checkout', { provider: $('#provider').value, items: buy.map(({ ingredientId, toBuy }) => ({ ingredientId, quantity: toBuy })), dietary: { diet, allergies } }, { timeoutMs: 30_000 });
     showDone(r, buy);
   } catch (err) {
     showError($('#checkout-error'), err.message);
@@ -583,9 +649,11 @@ function onSignedIn(id) {
 
 // ================= App shell =================
 function showView(name) {
-  if (name === 'groceries' && !state.result) name = 'home';
+  if ((name === 'groceries' || name === 'progress') && !state.result) name = 'home';
   $('#view-home').hidden = name !== 'home';
   $('#view-groceries').hidden = name !== 'groceries';
+  $('#view-progress').hidden = name !== 'progress';
+  if (name === 'progress') renderProgress();
   for (const t of $$('.tab')) {
     if (t.dataset.view === name) t.setAttribute('aria-current', 'page');
     else t.removeAttribute('aria-current');
@@ -595,6 +663,7 @@ function showView(name) {
 
 function render() {
   $('.tab[data-view="groceries"]').disabled = !state.result;
+  $('.tab[data-view="progress"]').disabled = !state.result;
   renderHome();
   renderGroceries();
 }
@@ -618,9 +687,17 @@ async function init() {
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (!$('#wizard').hidden) closeWizard();
+    else if (!$('#recipe-sheet').hidden) closeRecipe();
     else if (!$('#view-done').hidden) hideDone();
   });
   $('#checkout').addEventListener('click', onCheckout);
+  $('#demo-btn').addEventListener('click', () => { openWizard(); writeForm(E.DEMO_FORM); showStep(4); showError($('#form-error'), 'Demo profile (fictional): a 21-year-old student, $55/week, busy Tuesdays and Thursdays, rice, oats, eggs and peanut butter in the pantry.'); });
+  $('#pantry-search').addEventListener('input', (e) => searchPantry(e.target.value));
+  $$('[data-close-sheet]').forEach((b) => b.addEventListener('click', closeRecipe));
+  $('#recipe-sheet').addEventListener('click', (e) => e.target.id === 'recipe-sheet' && closeRecipe());
+  for (const [id, name] of [['prep-days', 'prepDays'], ['busy-days', 'busyDays']]) {
+    $(`#${id}`).replaceChildren(...E.WEEKDAYS.map((d) => el('label', {}, el('input', { type: 'checkbox', name, value: d }), el('span', {}, E.WEEKDAY_LABEL[d].slice(0, 3)))));
+  }
 
   try {
     config = await api('/api/config', null, { timeoutMs: 10_000 });
@@ -628,8 +705,8 @@ async function init() {
     $('#home-empty').hidden = false;
     return showError($('#checkout-error'), `Could not load app settings: ${err.message}`);
   }
-  $('#ai-status').textContent = config.ai ? 'AI planner on' : 'Built-in planner';
-  $('#ai-status').title = config.ai ? `Plans by ${config.model}` : 'Set ANTHROPIC_API_KEY to plan with AI';
+  $('#ai-status').textContent = 'Built-in planner (demo)';
+  $('#ai-status').title = 'Plans are built in your browser from a demo catalog';
   $('#allergies').replaceChildren(
     ...config.allergens.map((a) => el('label', {}, el('input', { type: 'checkbox', name: 'allergies', value: a }), el('span', {}, ALLERGEN_LABEL[a] ?? a[0].toUpperCase() + a.slice(1)))),
   );
@@ -657,3 +734,177 @@ async function init() {
 }
 
 init();
+
+// ================= Recipe sheet, "My day changed", meal log =================
+let sheetFocus = null;
+function openRecipe(dayIdx, slot) {
+  sheetFocus = document.activeElement;
+  renderRecipe(dayIdx, slot);
+  $('#recipe-sheet').hidden = false;
+  $('.app').inert = true;
+  $('#rs-title').focus();
+}
+function closeRecipe() {
+  $('#recipe-sheet').hidden = true;
+  $('.app').inert = false;
+  if (sheetFocus?.isConnected) sheetFocus.focus();
+}
+const nutriRow = (n) => el('div', { class: 'nutri' }, ...[['kcal', n.kcal, ''], ['protein', n.protein, ' g'], ['carbs', n.carbs, ' g'], ['fat', n.fat, ' g']].map(([k, v, u]) => el('span', {}, el('b', {}, `${Math.round(v)}${u}`), el('small', {}, k))));
+
+function renderRecipe(dayIdx, slot) {
+  const d = state.result.plan.days[dayIdx];
+  const m = d.meals.find((x) => x.slot === slot);
+  $('#rs-slot').textContent = `${d.label} · ${slot}`;
+  $('#rs-title').textContent = m.name;
+  const body = $('#rs-body');
+  const meta = m.eatOut
+    ? [`${m.source === 'demo' ? 'Demo venue' : 'Logged by you'}`, `~${fmtMoney(m.cost)}`, 'Nutrition is an estimate']
+    : [`${m.minutes} min total · ${m.activeMinutes} min hands-on`, m.prepOn ? `Cook on ${m.prepOn}, reheat ${m.effectiveMinutes} min` : null, `Equipment: ${m.equipment.length ? m.equipment.join(', ') : 'none'}`, `Serves 1 · ×${m.servings} portion`, `~${fmtMoney(m.cost)} of ingredients`, m.context ? `You have ${m.context.minutes} min${m.context.where === 'away' ? ', away from home' : ''}` : null].filter(Boolean);
+  fill(body, 
+    el('p', { class: 'meal-meta' }, meta.join(' · ')),
+    el('span', { class: 'badges' }, ...m.tags.map((t) => el('span', { class: 'mini-badge' }, t.replace(/-/g, ' ')))),
+    nutriRow(m),
+    m.fit && m.fit !== 'strict' ? el('p', { class: 'notice' }, 'Nothing in the catalog fit this slot exactly, so this is the closest option.') : null,
+    m.ingredients.length ? el('h3', {}, 'Ingredients') : null,
+    m.ingredients.length ? el('ul', { class: 'ings' }, ...m.ingredients.map((i) => el('li', {}, `${+i.quantity.toFixed(2)} ${i.unit} ${i.name}`))) : null,
+    m.steps.length ? el('h3', {}, 'Steps') : null,
+    m.steps.length ? el('ol', { class: 'steps' }, ...m.steps.map((s) => el('li', {}, s))) : null,
+    m.storage ? el('p', { class: 'fine' }, `Storage: ${m.storage.note}`) : null,
+    el('h3', {}, 'My day changed'),
+    el('div', { class: 'reasons' }, ...Object.entries(E.REASONS).map(([k, label]) => el('button', { type: 'button', class: 'btn btn-outline', onclick: () => showAlternatives(dayIdx, slot, k) }, label))),
+    el('div', { id: 'alt-area' }),
+    el('h3', {}, 'How did it go?'),
+    el('p', { class: 'fine' }, 'Any answer is fine. This only helps next week fit you better.'),
+    el('div', { class: 'reasons' },
+      el('button', { type: 'button', class: 'btn btn-primary', onclick: () => logMeal(dayIdx, slot, 'followed') }, 'Ate as planned'),
+      el('button', { type: 'button', class: 'btn btn-outline', onclick: () => askReason(dayIdx, slot, 'alternative') }, 'Ate something else'),
+      el('button', { type: 'button', class: 'btn btn-outline', onclick: () => askReason(dayIdx, slot, 'skipped') }, 'Skipped this meal'),
+    ),
+    el('div', { id: 'log-area' }, state.log[`${dayIdx}:${slot}`] ? el('p', { class: 'notice' }, `Logged: ${state.log[`${dayIdx}:${slot}`].status}${state.log[`${dayIdx}:${slot}`].reason ? ` (${E.LOG_REASONS[state.log[`${dayIdx}:${slot}`].reason]})` : ''}`) : null),
+  );
+}
+
+function showAlternatives(dayIdx, slot, reason) {
+  const area = $('#alt-area');
+  const m = state.result.plan.days[dayIdx].meals.find((x) => x.slot === slot);
+  fill(area, el('p', { class: 'lede' }, 'Finding options…'));
+  if (reason === 'eat_out') return showEatOut(dayIdx, slot);
+  if (reason === 'missing_ingredient' && !m.ingredients.length) return fill(area, el('p', { class: 'notice' }, 'This meal has no ingredients to miss.'));
+  const run = (missingIngredientId) => {
+    const res = E.alternatives(state.result, dayIdx, slot, reason, { missingIngredientId, inventory: state.inventory, have: state.owned, bought: state.bought, lines: state.result.groceries.lines.filter((l) => l.status === 'buy' && l.packs > 0) });
+    if (!res.alternatives.length) return fill(area, el('p', { class: 'notice' }, res.message));
+    fill(area, 
+      el('p', { class: 'eyebrow' }, 'Up to three options'),
+      ...res.alternatives.map((a) => el('div', { class: 'alt' },
+        el('b', {}, a.name),
+        el('span', { class: 'meal-meta' }, `${a.minutes} min · ~${fmtMoney(a.cost.consumed)} of ingredients · ${a.cost.newPurchase ? `+${fmtMoney(a.cost.newPurchase)} new groceries (${a.newIngredients.join(', ')})` : 'no new groceries'}`),
+        nutriRow(a.nutrition),
+        el('ul', { class: 'why' }, ...a.why.map((w) => el('li', {}, w))),
+        el('div', { class: 'reasons' },
+          el('button', { type: 'button', class: 'btn btn-primary', onclick: () => confirmSwap(dayIdx, slot, { recipeId: a.recipeId, servings: a.servings, prepOn: null, fit: 'swap' }, a.name) }, 'Use this'),
+          el('button', { type: 'button', class: 'btn btn-outline', onclick: () => fill(area, ) }, 'Cancel'),
+        ),
+      )),
+    );
+  };
+  if (reason === 'missing_ingredient') {
+    fill(area, el('p', { class: 'eyebrow' }, 'Which ingredient is missing?'), el('div', { class: 'reasons' }, ...m.ingredients.map((i) => el('button', { type: 'button', class: 'chip-btn', onclick: () => run(i.id) }, i.name))));
+    return;
+  }
+  run(null);
+}
+
+function showEatOut(dayIdx, slot) {
+  const area = $('#alt-area');
+  const opts = E.eatOutOptions(state.result.profile);
+  const manual = el('form', { class: 'manual', onsubmit: (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const kcal = Number(f.get('kcal'));
+    if (!f.get('name') || !(kcal > 0)) return showError($('#eo-err'), 'Name and calories are required.');
+    confirmSwap(dayIdx, slot, { eatOut: { name: String(f.get('name')).slice(0, 60), kcal, protein: Number(f.get('protein')) || 0, carbs: Number(f.get('carbs')) || 0, fat: Number(f.get('fat')) || 0, cost: Number(f.get('cost')) || 0, source: 'manual' } }, f.get('name'));
+  } },
+    el('label', {}, 'What did you eat? ', el('input', { name: 'name', required: true, maxlength: '60' })),
+    el('div', { class: 'fields' }, el('label', {}, 'kcal ', el('input', { name: 'kcal', type: 'number', min: '1', required: true })), el('label', {}, 'Protein g ', el('input', { name: 'protein', type: 'number', min: '0' })), el('label', {}, 'Carbs g ', el('input', { name: 'carbs', type: 'number', min: '0' })), el('label', {}, 'Fat g ', el('input', { name: 'fat', type: 'number', min: '0' })), el('label', {}, 'Cost $ ', el('input', { name: 'cost', type: 'number', min: '0', step: '0.5' }))),
+    el('p', { id: 'eo-err', class: 'error', hidden: true }),
+    el('button', { type: 'submit', class: 'btn btn-primary' }, 'Log this meal'),
+  );
+  fill(area, 
+    el('p', { class: 'eyebrow' }, 'Demo menu · not a real restaurant'),
+    el('p', { class: 'fine' }, 'These are typical examples with estimated nutrition and prices, shown for the demo. Real venues need a menu source.'),
+    ...opts.map((o) => el('div', { class: 'alt' }, el('b', {}, o.name), el('span', { class: 'meal-meta' }, `~${fmtMoney(o.price)} · demo data`), nutriRow(o),
+      el('div', { class: 'reasons' }, el('button', { type: 'button', class: 'btn btn-primary', onclick: () => confirmSwap(dayIdx, slot, { eatOut: { name: o.name, kcal: o.kcal, protein: o.protein, carbs: o.carbs, fat: o.fat, cost: o.price, source: 'demo' } }, o.name) }, 'Use this')))),
+    el('p', { class: 'eyebrow' }, 'Or enter it by hand'),
+    manual,
+  );
+}
+
+function confirmSwap(dayIdx, slot, entry, name) {
+  const d = state.result.plan.days[dayIdx];
+  const prev = { skeleton: state.result.skeleton, bought: state.bought.slice(), inventory: state.inventory.slice() };
+  const oldLines = state.result.groceries.lines;
+  state.result = E.applySwap(state.result, dayIdx, slot, entry);
+  regroceries();
+  // Bought ingredients the new plan no longer needs stay in the pantry instead of vanishing.
+  for (const l of oldLines) {
+    if (l.status === 'bought' && !state.result.groceries.lines.some((n) => n.ingredientId === l.ingredientId)) {
+      state.inventory.push({ ingredientId: l.ingredientId, quantity: l.packs * l.packSize });
+      state.bought = state.bought.filter((x) => x !== l.ingredientId);
+    }
+  }
+  regroceries();
+  state.undo = [...state.undo.slice(-19), prev];
+  save(); render(); renderRecipe(dayIdx, slot);
+  toast(`${slot} on ${d.label} updated.`, () => {
+    const p = state.undo.pop();
+    state.result = E.rebuild(state.result, p.skeleton); state.bought = p.bought; state.inventory = p.inventory;
+    regroceries(); save(); render(); if (!$('#recipe-sheet').hidden) renderRecipe(dayIdx, slot);
+  });
+}
+
+let toastTimer;
+function toast(text, undo) {
+  const t = $('#toast');
+  fill(t, el('span', {}, text), undo ? el('button', { type: 'button', class: 'btn btn-quiet', onclick: () => { undo(); t.hidden = true; } }, 'Undo') : null);
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.hidden = true), 8000);
+}
+
+function askReason(dayIdx, slot, status) {
+  fill($('#log-area'), el('p', { class: 'eyebrow' }, 'What got in the way? (optional)'), el('div', { class: 'reasons' },
+    ...Object.entries(E.LOG_REASONS).map(([k, label]) => el('button', { type: 'button', class: 'chip-btn', onclick: () => logMeal(dayIdx, slot, status, k) }, label)),
+    el('button', { type: 'button', class: 'chip-btn', onclick: () => logMeal(dayIdx, slot, status, null) }, 'Skip this question')));
+}
+function logMeal(dayIdx, slot, status, reason = null) {
+  const m = state.result.plan.days[dayIdx].meals.find((x) => x.slot === slot);
+  state.log[`${dayIdx}:${slot}`] = { status, reason, at: Date.now(), nutrition: status === 'skipped' ? null : { kcal: m.kcal, protein: m.protein, carbs: m.carbs, fat: m.fat }, slot, minutes: m.minutes };
+  save(); render(); renderRecipe(dayIdx, slot);
+  toast(status === 'followed' ? 'Nice. Logged as planned.' : 'Logged. Thanks for keeping it real.');
+}
+
+function renderProgress() {
+  const s = E.progressStats(state.log);
+  const planned = state.result.plan.days.reduce((n, d) => n + d.meals.length, 0);
+  const pct = (n) => (s.logged ? `${Math.round((n / s.logged) * 100)}%` : '—');
+  const hints = [];
+  const timeLunch = Object.values(state.log).filter((e) => e.reason === 'time' && e.slot === 'lunch').length;
+  if (timeLunch >= 2) hints.push('You often swapped lunches for lack of time. Next week we will favor lunches under 10 minutes.');
+  if (s.topReasons[0]?.[0] === 'cost') hints.push('Cost came up most often. Next week we will lean on cheaper staples and pantry items.');
+  if (s.topReasons[0]?.[0] === 'taste') hints.push("Some meals weren't to your taste. Pin the ones you liked and we'll repeat those.");
+  fill($('#progress-body'), 
+    el('div', { class: 'budget-grid' },
+      el('div', {}, el('small', {}, 'Meals logged'), el('b', {}, `${s.logged} of ${planned}`)),
+      el('div', {}, el('small', {}, 'As planned'), el('b', {}, `${s.followed} · ${pct(s.followed)}`)),
+      el('div', {}, el('small', {}, 'Adapted'), el('b', {}, `${s.adapted} · ${pct(s.adapted)}`)),
+      el('div', {}, el('small', {}, 'Skipped'), el('b', {}, `${s.skipped} · ${pct(s.skipped)}`)),
+    ),
+    el('h3', {}, 'What got in the way'),
+    s.topReasons.length ? el('ul', {}, ...s.topReasons.map(([k, n]) => el('li', {}, `${E.LOG_REASONS[k]}: ${n}`))) : el('p', { class: 'fine' }, 'No reasons logged yet.'),
+    el('h3', {}, 'Eaten so far (logged meals only)'),
+    el('p', { class: 'fine' }, 'Planned nutrition and logged nutrition are different things; this only counts meals you logged as eaten.'),
+    nutriRow(s.eaten),
+    hints.length ? el('h3', {}, 'For next week') : null,
+    ...hints.map((h) => el('p', { class: 'notice' }, h)),
+  );
+}
