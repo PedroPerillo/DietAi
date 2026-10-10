@@ -35,6 +35,17 @@ async function readJson(req) {
   return body;
 }
 
+// Behind Vercel (or another proxy set via TRUST_PROXY=1) every request arrives from the
+// proxy, so the real client is the first x-forwarded-for hop. Never trusted otherwise,
+// because a direct client could spoof it.
+function clientIp(req) {
+  if (process.env.VERCEL || process.env.TRUST_PROXY === '1') {
+    const forwarded = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim();
+    if (forwarded) return forwarded;
+  }
+  return req.socket.remoteAddress;
+}
+
 // Fixed-window limit on Claude-backed requests per client IP, so an exposed server
 // can't be used to burn the API key.
 function rateLimiter(max, windowMs = 60_000) {
@@ -42,7 +53,7 @@ function rateLimiter(max, windowMs = 60_000) {
   return (req) => {
     const now = Date.now();
     for (const [ip, h] of hits) if (now - h.start > windowMs) hits.delete(ip);
-    const ip = req.socket.remoteAddress;
+    const ip = clientIp(req);
     const hit = hits.get(ip);
     if (!hit) return void hits.set(ip, { start: now, count: 1 });
     if (++hit.count > max) throw httpError(429, 'Too many plans requested. Please wait a minute and try again.');
@@ -146,9 +157,10 @@ async function serveStatic(req, res) {
   }
 }
 
-export function createServer({ planRateLimit = Number(process.env.PLAN_RATE_LIMIT) || 10 } = {}) {
+// The request handler on its own, shared by the local server and the Vercel function.
+export function createHandler({ planRateLimit = Number(process.env.PLAN_RATE_LIMIT) || 10 } = {}) {
   const routes = makeRoutes({ checkRateLimit: rateLimiter(planRateLimit) });
-  return http.createServer(async (req, res) => {
+  return async (req, res) => {
     const route = routes[`${req.method} ${req.url.split('?')[0]}`];
     if (!route) {
       if (req.url.startsWith('/api/')) return send(res, 404, { error: 'Not found' });
@@ -165,7 +177,11 @@ export function createServer({ planRateLimit = Number(process.env.PLAN_RATE_LIMI
       if (status >= 500) console.error(e);
       send(res, status, { error: status >= 500 && !e.status ? 'Something went wrong' : e.message });
     }
-  });
+  };
+}
+
+export function createServer(opts) {
+  return http.createServer(createHandler(opts));
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

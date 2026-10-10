@@ -24,10 +24,21 @@ Copy `.env.example` to `.env` to configure it. It works with no configuration: p
 | `HOST` | Defaults to `127.0.0.1`. Set `0.0.0.0` to expose it (containers, previews) |
 | `PLAN_RATE_LIMIT` | Plan requests per IP per minute when AI is on (default 10) |
 
+## Deploy to Vercel
+
+The repo is ready to deploy as-is: `public/` is served from Vercel's CDN and `api/index.mjs` runs every `/api/*` route as one serverless function (120 s max, which covers the 90 s Claude deadline).
+
+1. In Vercel: **Add New → Project → Import** `PedroPerillo/DietAi`. Leave the framework preset as **Other** and the build settings blank.
+2. Under **Settings → Environment Variables**, add `ANTHROPIC_API_KEY` (and optionally `INSTACART_API_KEY`, `INSTACART_BASE_URL`, `PUBLIC_URL`). Without them, the site still works with the built-in planner and the demo cart.
+3. Deploy. Every push to `main` redeploys automatically.
+
+On Vercel the rate limiter uses the client IP from `x-forwarded-for`. Elsewhere behind a proxy, set `TRUST_PROXY=1`. Limits are kept per function instance, so they're best-effort; use a shared store (e.g. Upstash or Supabase) for strict limits.
+
 ## Layout
 
 ```
-server.mjs              HTTP server: /api/config, /api/plan, /api/checkout, static files
+server.mjs              request handler (/api/config, /api/plan, /api/checkout, static files) + local server
+api/index.mjs           Vercel serverless entry (same handler)
 lib/catalog.mjs         ingredients (unit, pack, price, allergens) + recipes (per-serving macros)
 lib/profile.mjs         input validation, calorie/macro targets
 lib/plan.mjs            built-in planner, skeleton validation, plan builder

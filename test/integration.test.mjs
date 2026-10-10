@@ -211,3 +211,41 @@ test('instacart line items never use units Instacart lacks', () => {
   assert.deepEqual(toLineItem(lineFor('garlic', 13)).line_item_measurements, [{ quantity: 2, unit: 'head' }]);
   assert.deepEqual(toLineItem(lineFor('eggs', 5)).line_item_measurements, [{ quantity: 5, unit: 'each' }]);
 });
+
+test('the Vercel function entry serves the API with the same handler', async () => {
+  const { default: handler } = await import('../api/index.mjs');
+  const srv = http.createServer(handler).listen(0);
+  await new Promise((r) => srv.once('listening', r));
+  const url = `http://localhost:${srv.address().port}`;
+  try {
+    assert.equal((await fetch(`${url}/api/config`)).status, 200);
+    const res = await fetch(`${url}/api/plan`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).plan.days.length, 2);
+  } finally {
+    srv.close();
+  }
+});
+
+test('rate limiting keys on x-forwarded-for only when behind a trusted proxy', async () => {
+  const prev = { key: process.env.ANTHROPIC_API_KEY, proxy: process.env.TRUST_PROXY };
+  // AI "on" so the limiter runs; the planner fails fast against an unroutable base URL.
+  process.env.ANTHROPIC_API_KEY = 'test-key';
+  const srv = createServer({ planRateLimit: 1 }).listen(0);
+  await new Promise((r) => srv.once('listening', r));
+  const url = `http://localhost:${srv.address().port}/api/plan`;
+  const hit = (ip) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-forwarded-for': ip }, body: '{}' });
+  try {
+    process.env.TRUST_PROXY = '1';
+    assert.equal((await hit('1.1.1.1')).status, 400); // passes the limiter, fails validation
+    assert.equal((await hit('2.2.2.2')).status, 400); // different client, own budget
+    assert.equal((await hit('1.1.1.1')).status, 429);
+    delete process.env.TRUST_PROXY;
+    assert.equal((await hit('3.3.3.3')).status, 400); // header ignored: keyed on the socket,
+    assert.equal((await hit('4.4.4.4')).status, 429); // so a spoofed header doesn't help
+  } finally {
+    srv.close();
+    if (prev.key === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = prev.key;
+    if (prev.proxy === undefined) delete process.env.TRUST_PROXY; else process.env.TRUST_PROXY = prev.proxy;
+  }
+});
