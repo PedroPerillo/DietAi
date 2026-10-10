@@ -169,13 +169,16 @@ test('instacart rejects a link that is not https', async () => {
   }
 });
 
-test('instacart health filters go on packaged goods only', () => {
+test('instacart health filters go only on ingredients with a label risk', () => {
   const dietary = { glutenFree: true, vegan: true };
-  assert.deepEqual(toLineItem(lineFor('salsa', 50), dietary).filters, { health_filters: ['GLUTEN_FREE', 'VEGAN'] });
-  assert.deepEqual(toLineItem(lineFor('salsa', 50), { glutenFree: false, vegan: true }).filters, { health_filters: ['VEGAN'] });
-  assert.equal(toLineItem(lineFor('banana', 2), dietary).filters, undefined);
-  assert.equal(toLineItem(lineFor('salmon', 200), dietary).filters, undefined);
-  assert.equal(toLineItem(lineFor('salsa', 50)).filters, undefined);
+  assert.deepEqual(toLineItem(lineFor('curry_paste', 15), dietary).filters, { health_filters: ['GLUTEN_FREE', 'VEGAN'] });
+  assert.deepEqual(toLineItem(lineFor('curry_paste', 15), { glutenFree: false, vegan: true }).filters, { health_filters: ['VEGAN'] });
+  assert.deepEqual(toLineItem(lineFor('tempeh', 100), dietary).filters, { health_filters: ['GLUTEN_FREE'] }); // barley risk, filed under Produce
+  assert.deepEqual(toLineItem(lineFor('ww_tortilla', 2), dietary).filters, { health_filters: ['VEGAN'] });
+  for (const staple of ['brown_rice', 'olive_oil', 'lentils', 'quinoa', 'banana', 'salmon']) {
+    assert.equal(toLineItem(lineFor(staple, 1), dietary).filters, undefined, staple);
+  }
+  assert.equal(toLineItem(lineFor('curry_paste', 15)).filters, undefined);
 });
 
 test('instacart line items never use units Instacart lacks', () => {

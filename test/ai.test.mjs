@@ -4,14 +4,17 @@ import http from 'node:http';
 
 // Point the real SDK at a local fake so we exercise request construction + parsing.
 const HANG = Symbol('hang');
-let srv, lastRequest, reply, onUpstreamClose;
+let srv, lastRequest, reply, onUpstreamRequest, onUpstreamClose;
 before(async () => {
   srv = http.createServer(async (req, res) => {
     let raw = '';
     for await (const c of req) raw += c;
     lastRequest = { url: req.url, headers: req.headers, body: JSON.parse(raw) };
     const r = reply();
-    if (r === HANG) return res.on('close', () => onUpstreamClose?.());
+    if (r === HANG) {
+      res.on('close', () => onUpstreamClose?.());
+      return onUpstreamRequest?.();
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(r));
   }).listen(0);
   await new Promise((r) => srv.once('listening', r));
@@ -23,8 +26,11 @@ after(() => {
   srv.close();
 });
 
+// All top-level awaits must come before the first test(): an await between tests lets
+// node:test run the after() hook early and shut the fake down mid-file.
 const { aiSkeleton, PlannerError } = await import('../lib/ai.mjs');
 const { parseProfile, computeTargets } = await import('../lib/profile.mjs');
+const { createServer } = await import('../server.mjs');
 
 const profile = parseProfile({ sex: 'female', age: 35, heightCm: 168, weightKg: 70, activity: 'light', goal: 'lose', diet: 'vegetarian', allergies: ['egg'], days: 1, snacks: false });
 const targets = computeTargets(profile);
@@ -64,7 +70,6 @@ test('rejects refusals, truncation and malformed JSON', async () => {
 });
 
 // ---- through the HTTP server, with the fake Anthropic behind it ----
-const { createServer } = await import('../server.mjs');
 const listen = async (opts) => {
   const s = createServer(opts).listen(0);
   await new Promise((r) => s.once('listening', r));
@@ -73,15 +78,24 @@ const listen = async (opts) => {
 const planBody = JSON.stringify({ sex: 'female', age: 35, heightCm: 168, weightKg: 70, activity: 'light', goal: 'lose', diet: 'vegetarian', allergies: ['egg'], days: 1, snacks: false });
 const postPlan = (url, signal) => fetch(`${url}/api/plan`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: planBody, signal });
 
+const within = (promise, ms, message) =>
+  Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error(message)), ms))]);
+
 test('cancels the Claude call when the browser disconnects', async () => {
+  const received = new Promise((r) => (onUpstreamRequest = r));
   const closed = new Promise((r) => (onUpstreamClose = r));
   reply = () => HANG;
   const { s, url } = await listen();
+  const browser = new AbortController();
   try {
-    await assert.rejects(postPlan(url, AbortSignal.timeout(300)));
-    await Promise.race([closed, new Promise((_, rej) => setTimeout(() => rej(new Error('upstream call was not cancelled')), 2000))]);
+    const pending = postPlan(url, browser.signal);
+    // Only disconnect once the Claude request is actually in flight.
+    await within(received, 2000, 'plan request never reached the fake Anthropic server');
+    browser.abort();
+    await assert.rejects(pending, { name: 'AbortError' });
+    await within(closed, 2000, 'upstream call was not cancelled');
   } finally {
-    onUpstreamClose = null;
+    onUpstreamRequest = onUpstreamClose = null;
     s.close();
   }
 });
@@ -90,8 +104,12 @@ test('rate-limits plan requests when AI is on', async () => {
   reply = () => message(JSON.stringify({ summary: '', days: [day] }));
   const { s, url } = await listen({ planRateLimit: 2 });
   try {
-    assert.equal((await postPlan(url)).status, 200);
-    assert.equal((await postPlan(url)).status, 200);
+    for (let i = 0; i < 2; i++) {
+      const res = await postPlan(url);
+      assert.equal(res.status, 200);
+      // Guards against silently testing the fallback path instead of the AI path.
+      assert.equal((await res.json()).source, 'ai');
+    }
     const third = await postPlan(url);
     assert.equal(third.status, 429);
     assert.match((await third.json()).error, /wait a minute/);
