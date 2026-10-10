@@ -32,18 +32,44 @@ let state = { result: null, owned: [], day: 0, form: null };
 const save = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 let config;
 
+// AbortSignal.any needs Safari 17.4 and AbortSignal.timeout Safari 16; fall back so older
+// iPhones (iOS 15/16) can still build plans and load settings.
+function timeoutSignal(ms) {
+  if (AbortSignal.timeout) return AbortSignal.timeout(ms);
+  const c = new AbortController();
+  setTimeout(() => c.abort(new DOMException('Timed out', 'TimeoutError')), ms);
+  return c.signal;
+}
+function anySignal(signals) {
+  if (AbortSignal.any) return AbortSignal.any(signals);
+  const c = new AbortController();
+  for (const s of signals) {
+    if (s.aborted) { c.abort(s.reason); break; }
+    s.addEventListener('abort', () => c.abort(s.reason), { once: true });
+  }
+  return c.signal;
+}
+
 async function api(path, body, { timeoutMs = 150_000, signal } = {}) {
-  const signals = [AbortSignal.timeout(timeoutMs), signal].filter(Boolean);
+  const timeout = timeoutSignal(timeoutMs);
   const res = await fetch(path, {
     method: body ? 'POST' : 'GET',
     headers: body ? { 'Content-Type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
-    signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
+    signal: signal ? anySignal([timeout, signal]) : timeout,
   }).catch((e) => {
     if (signal?.aborted) throw Object.assign(new Error('Cancelled.'), { cancelled: true });
-    throw new Error(e.name === 'TimeoutError' ? 'The request timed out. Please try again.' : 'Could not reach the server.');
+    throw new Error(timeout.aborted ? 'The request timed out. Please try again.' : 'Could not reach the server.');
   });
-  const data = await res.json().catch(() => ({}));
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    // A cut-off body (e.g. the sheet closed mid-download) must never be treated as a result.
+    if (signal?.aborted) throw Object.assign(new Error('Cancelled.'), { cancelled: true });
+    if (res.ok) throw new Error('The server sent an incomplete response. Please try again.');
+    data = {};
+  }
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data;
 }
@@ -110,7 +136,9 @@ function validateStep(n, v) {
   if (!inRange(v.age, 18, 100)) return 'Age must be between 18 and 100.';
   if (v.units === 'imperial') {
     if (!inRange(v.weightLb, 80, 660)) return 'Weight must be between 80 and 660 lb.';
-    if (!inRange(v.heightFt, 4, 7) || !inRange(v.heightIn, 0, 11)) return 'Height must be between 4 ft and 7 ft 11 in.';
+    const inches = Number(v.heightFt) * 12 + Number(v.heightIn);
+    // Server accepts 120-230 cm: 4 ft 0 in (122 cm) to 7 ft 6 in (229 cm).
+    if (!inRange(v.heightFt, 4, 7) || !inRange(v.heightIn, 0, 11) || inches > 90) return 'Height must be between 4 ft 0 in and 7 ft 6 in.';
   } else {
     if (!inRange(v.weightKg, 35, 300)) return 'Weight must be between 35 and 300 kg.';
     if (!inRange(v.heightCm, 120, 230)) return 'Height must be between 120 and 230 cm.';
@@ -157,9 +185,18 @@ function showStep(n) {
   form().scrollTop = 0;
 }
 
+// Users from before the wizard only have the API profile saved (metric units).
+function formFromProfile(p) {
+  if (!p) return null;
+  return {
+    sex: p.sex, units: 'metric', age: p.age, weightKg: p.weightKg, heightCm: p.heightCm, goal: p.goal, activity: p.activity,
+    diet: p.diet, allergies: p.allergies ?? [], dislikes: (p.dislikes ?? []).join(', '), days: p.days, snacks: p.snacks, notes: p.notes ?? '',
+  };
+}
+
 function openWizard() {
   lastFocus = document.activeElement;
-  writeForm(state.form);
+  writeForm(state.form ?? formFromProfile(state.result?.profile));
   setLoading(false);
   showStep(1);
   $('#wizard').hidden = false;
@@ -167,11 +204,13 @@ function openWizard() {
   $('#wz-title').focus();
 }
 
-function closeWizard() {
+function closeWizard({ restoreFocus = true } = {}) {
   if (building) building.abort(); // stops the server-side Claude call too
+  building = null;
   $('#wizard').hidden = true;
   $('.app').inert = false;
-  lastFocus?.focus?.();
+  if (restoreFocus && lastFocus?.isConnected && lastFocus.offsetParent !== null) lastFocus.focus();
+  else if (restoreFocus) ($('#home-plan').hidden ? $('#home-empty .btn') : $('#h-home')).focus();
 }
 
 function setLoading(on) {
@@ -196,16 +235,20 @@ async function onNext() {
   building = new AbortController();
   setLoading(true);
   try {
-    const result = await api('/api/plan', toProfile(v), { signal: building.signal });
+    const { signal } = building;
+    const result = await api('/api/plan', toProfile(v), { signal });
+    if (signal.aborted) return; // closed after the response arrived: keep the previous plan
+    if (!result?.plan?.days?.length) throw new Error('The server sent an unexpected response. Please try again.');
     state = { result, owned: [], day: 0, form: v };
     save();
     building = null;
-    closeWizard();
+    closeWizard({ restoreFocus: false });
     render();
     showView('home');
+    $('#h-home').focus(); // the button that opened the wizard may now be hidden
   } catch (err) {
+    if (err.cancelled || building?.signal.aborted) return;
     building = null;
-    if (err.cancelled) return;
     setLoading(false);
     showStep(4);
     showError($('#form-error'), err.message);
@@ -412,6 +455,7 @@ function hideDone() {
   $('#view-done').hidden = true;
   $('.app').inert = false;
   showView('home');
+  $('#h-home').focus();
 }
 
 // ================= App shell =================
@@ -446,7 +490,8 @@ async function init() {
     if (step === 4) renderPlanUses();
   });
   $$('[data-days]').forEach((b) => b.addEventListener('click', () => { setDays(Number(form().elements.days.value) + Number(b.dataset.days)); renderPlanUses(); }));
-  $('#wizard').addEventListener('click', (e) => e.target.id === 'wizard' && closeWizard());
+  // Taps on the dimmed area close the sheet, but never cancel a plan that's being built.
+  $('#wizard').addEventListener('click', (e) => e.target.id === 'wizard' && !building && closeWizard());
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (!$('#wizard').hidden) closeWizard();
