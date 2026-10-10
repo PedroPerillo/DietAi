@@ -48,6 +48,7 @@
           </div>
           <h1 class="display">Plan your week</h1>
           <p class="lede">Tell us a little about you. FitBite builds a week of meals around your goal and fills your grocery cart.</p>
+          <p id="outdated-note" class="notice" hidden>FitBite has been updated with recipes, budgets and "My day changed". Your answers are saved: tap below to rebuild your plan.</p>
           <button type="button" class="btn btn-primary btn-block" data-open-wizard>Build my plan</button>
         </div>
 
@@ -81,6 +82,7 @@
           </div>
           <div class="home-col home-day">
           <div id="day-picker" class="day-picker" role="tablist" aria-label="Days"></div>
+          <h2 id="day-title" class="day-title"></h2>
           <section id="meals" class="meals" aria-live="polite"></section>
           </div>
           </div>
@@ -103,8 +105,9 @@
         <div class="groceries-layout">
         <div id="grocery-list"></div>
         <aside class="checkout-panel" aria-label="Checkout">
+        <dl id="cost-summary" class="cost-summary" aria-label="Costs this week"></dl>
         <label class="field">Send to <select id="provider"></select></label>
-        <p class="fine">Prices are estimates. You review and pay on the store's site.</p>
+        <p class="fine">Prices are estimates, not live store prices. You review and pay on the store's site.</p>
         <p id="checkout-error" class="error" role="alert" hidden></p>
         <div class="checkoutbar">
           <div class="total"><small id="total-label">Estimated</small><strong id="grocery-total">$0.00</strong></div>
@@ -145,6 +148,23 @@
       <p class="slogan">Every bite moves you forward.</p>
     </div>
   </section>
+
+  <!-- ===== Meal panel: recipe details and "My day changed" (bottom sheet) ===== -->
+  <div id="panel" class="sheet-backdrop" hidden>
+    <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="pn-title">
+      <div class="handle" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <span id="pn-eyebrow" class="eyebrow"></span>
+        <button type="button" class="icon-btn" id="pn-close" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+      </div>
+      <h2 id="pn-title" class="display panel-title" tabindex="-1"></h2>
+      <div id="pn-body" class="sheet-body panel-body"></div>
+      <p id="pn-error" class="error" role="alert" hidden></p>
+      <div id="pn-foot" class="sheet-foot"></div>
+    </section>
+  </div>
 
   <!-- ===== New plan wizard (bottom sheet) ===== -->
   <div id="wizard" class="sheet-backdrop" hidden>

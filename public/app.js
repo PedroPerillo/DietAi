@@ -1,15 +1,26 @@
+import { hydratePlan, grocerySummary, alternativesFor, applyMealChange, CHANGE_REASONS } from './shared/engine.mjs';
+import { INGREDIENTS, storageTips } from './shared/catalog.mjs';
+
 const STORAGE_KEY = 'fitbite:v1';
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
-const fmtMoney = (n) => `$${n.toFixed(2)}`;
+const fmtMoney = (n) => `${n < 0 ? '−' : ''}$${Math.abs(n).toFixed(2)}`;
 const fmtNum = (n) => Math.round(n).toLocaleString('en-US');
 const GOAL_LABEL = { lose: 'Lose weight', maintain: 'Maintain', gain: 'Build muscle' };
 const DIET_LABEL = { omnivore: 'Everything', pescatarian: 'Pescatarian', vegetarian: 'Vegetarian', vegan: 'Vegan' };
 const ACTIVITY_LABEL = { sedentary: 'Mostly sitting', light: 'Light activity', moderate: 'Moderate activity', active: 'Active', very_active: 'Athlete' };
 const ALLERGEN_LABEL = { nuts: 'Tree nuts', egg: 'Eggs' };
+const EQUIPMENT_LABEL = { stove: 'Stove', oven: 'Oven', microwave: 'Microwave', airfryer: 'Air fryer' };
 const LEAF = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19c0-8 5-13 14-14-1 9-6 14-14 14z"/><path d="M5 19l8-8"/></svg>';
 const PREVIEW_ITEMS = 3; // items shown per aisle before "Show N more"
 const AISLE_ORDER = ['Produce', 'Meat & Seafood', 'Dairy', 'Bakery', 'Deli', 'Frozen', 'Pantry'];
+// Why a meal doesn't fit its slot (engine "hard" rules), in plain words.
+const RULE_TEXT = {
+  time: 'takes longer than the time you have',
+  portable: "doesn't pack well to take away",
+  reheat: 'needs reheating and there is no microwave where you eat',
+  equipment: "needs kitchen equipment you don't have",
+};
 
 // Small DOM helper so nothing from the server (incl. AI text) is ever parsed as HTML.
 function el(tag, attrs = {}, ...children) {
@@ -28,8 +39,28 @@ const svgIcon = (markup) => {
   return t.content.firstChild;
 };
 
-const EMPTY_STATE = { result: null, owned: [], day: 0, form: null };
+// Practical amounts: ½ can, 1½ avocados, 150 g.
+const FRACTIONS = { 0.25: '¼', 0.5: '½', 0.75: '¾' };
+function fmtAmount(n) {
+  const whole = Math.floor(n + 1e-9);
+  const frac = FRACTIONS[+(n - whole).toFixed(2)];
+  if (frac) return whole ? `${whole}${frac}` : frac;
+  return String(+n.toFixed(2));
+}
+function fmtQty(id, qty) {
+  const { unit } = INGREDIENTS[id];
+  if (unit === 'g' || unit === 'ml') return `${Math.round(qty)} ${unit}`;
+  if (unit === 'each') return fmtAmount(qty);
+  return `${fmtAmount(qty)} ${unit}${qty > 1 ? 's' : ''}`;
+}
+const cap = (t) => t[0].toUpperCase() + t.slice(1);
+
+// state.result is the server's { profile, plan, source, summary, warning }. Groceries:
+// have = ingredient ids you already have enough of; bought = { id: packs } already bought.
+// changes logs every "my day changed" swap (what you actually ate), for learning later.
+const EMPTY_STATE = { result: null, have: [], bought: {}, changes: [], day: 0, form: null };
 let state = { ...EMPTY_STATE };
+let outdatedPlan = false; // a plan saved by an older FitBite version was dropped on load
 let config;
 let userId = null; // Clerk user id when sign-in is on; plans are stored per user on this device
 const storageKey = () => (userId ? `${STORAGE_KEY}:${userId}` : STORAGE_KEY);
@@ -37,6 +68,7 @@ const save = () => localStorage.setItem(storageKey(), JSON.stringify(state));
 
 function loadState() {
   state = { ...EMPTY_STATE };
+  outdatedPlan = false;
   try {
     // A plan made before sign-in existed moves to the first account that signs in here.
     if (userId && !localStorage.getItem(storageKey()) && localStorage.getItem(STORAGE_KEY)) {
@@ -44,10 +76,33 @@ function loadState() {
       localStorage.removeItem(STORAGE_KEY);
     }
     const saved = JSON.parse(localStorage.getItem(storageKey()));
-    if (saved?.result?.plan?.days && Array.isArray(saved.owned)) state = { ...EMPTY_STATE, ...saved };
+    if (!saved) return;
+    // Plans from before the shared engine have no dates or meal kinds; keep the answers so
+    // rebuilding is one tap, but drop the plan itself.
+    if (!saved.result?.plan?.days?.[0]?.date || !saved.result.plan.days[0].meals?.[0]?.kind) {
+      outdatedPlan = Boolean(saved.result);
+      state = { ...EMPTY_STATE, form: saved.form ?? null };
+      return;
+    }
+    state = { ...EMPTY_STATE, ...saved, have: saved.have ?? saved.owned ?? [] };
+    delete state.owned;
   } catch {
     localStorage.removeItem(storageKey());
   }
+}
+
+// Everything the screens show is derived from the stored plan by the shared engine.
+let view = null;
+function groceryState() {
+  const partial = (state.result.profile.inventory ?? []).filter((e) => e.qty != null && !state.have.includes(e.id));
+  return { inventory: [...partial, ...state.have.map((id) => ({ id, qty: null }))], bought: state.bought };
+}
+function derive() {
+  const r = state.result;
+  if (!r) return (view = null);
+  const plan = hydratePlan(r.plan, r.profile);
+  view = { plan, groceries: grocerySummary(plan, groceryState(), r.profile.budget ?? null) };
+  return view;
 }
 
 // AbortSignal.any needs Safari 17.4 and AbortSignal.timeout Safari 16; fall back so older
@@ -158,8 +213,13 @@ function toProfile(v) {
     heightCm: imperial ? Math.round((n(v.heightFt) * 12 + n(v.heightIn)) * 2.54) : n(v.heightCm),
     weightKg: imperial ? Math.round(n(v.weightLb) * 0.4536 * 10) / 10 : n(v.weightKg),
     activity: v.activity, goal: v.goal, diet: v.diet, allergies: v.allergies, dislikes: v.dislikes ?? '',
-    days: v.days, snacks: v.snacks, notes: v.notes ?? '',
+    days: v.days, snacks: v.snacks, notes: v.notes ?? '', startDate: localDate(),
   };
+}
+
+// Plans start today in the user's own time zone (the server would use UTC).
+function localDate(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function validateStep(n, v) {
@@ -276,7 +336,9 @@ async function onNext() {
     const result = await api('/api/plan', toProfile(v), { signal });
     if (signal.aborted) return; // closed after the response arrived: keep the previous plan
     if (!result?.plan?.days?.length) throw new Error('The server sent an unexpected response. Please try again.');
-    state = { result, owned: [], day: 0, form: v };
+    const have = (result.profile.inventory ?? []).filter((e) => e.qty == null).map((e) => e.id);
+    state = { ...EMPTY_STATE, result, have, form: v };
+    outdatedPlan = false;
     save();
     building = null;
     closeWizard({ restoreFocus: false });
@@ -298,25 +360,55 @@ function greeting() {
   return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
 }
 
+let flash = null; // one-time confirmation shown after a change (e.g. a swapped meal)
+
+function planNotices(r, plan) {
+  const t = plan.targets;
+  const notices = [];
+  if (flash) notices.push(el('p', { class: 'notice ok', role: 'status' }, flash));
+  if (r.warning) notices.push(r.warning);
+  if (t.floored) notices.push(`Your target was raised to the ${config?.minKcal ?? 1200} kcal/day safety minimum.`);
+  if (plan.budgetNote) {
+    notices.push(el('div', { class: 'notice' }, el('p', {}, plan.budgetNote.text), el('ul', {}, plan.budgetNote.tips.map((tip) => el('li', {}, tip)))));
+  }
+  for (const n of plan.notes ?? []) {
+    if (n.type !== 'relaxed') continue;
+    const day = plan.days[n.day];
+    if (!day) continue;
+    const rules = n.detail.map((h) => RULE_TEXT[h] ?? h).join(' and ');
+    notices.push(`${day.label} ${n.slot}: no recipe fit every part of your routine, so this one ${rules}.`);
+  }
+  if (plan.deviations.length) {
+    notices.push(el('div', { class: 'notice' },
+      el('p', {}, "With your diet and routine, this week can't match every target. Weekly averages:"),
+      el('ul', {}, plan.deviations.map((d) => el('li', {}, d.text)))));
+  }
+  return notices.map((n) => (typeof n === 'string' ? el('p', { class: 'notice', role: 'status' }, n) : n));
+}
+
 function renderHome() {
   const r = state.result;
   $('#home-empty').hidden = Boolean(r);
   $('#home-plan').hidden = !r;
+  $('#outdated-note').hidden = !outdatedPlan;
   if (!r) return;
-  const { plan, profile } = r;
+  const { profile } = r;
+  const { plan, groceries } = view;
   const t = plan.targets;
   const day = Math.min(state.day ?? 0, plan.days.length - 1);
   const d = plan.days[day];
 
   $('#greeting').textContent = greeting();
   $('#plan-chips').replaceChildren(
-    ...[GOAL_LABEL[profile.goal], `${fmtNum(t.kcal)} kcal / day`, DIET_LABEL[profile.diet], `${plan.days.length} day${plan.days.length > 1 ? 's' : ''}${profile.snacks ? ' + snack' : ''}`]
-      .map((text) => el('span', {}, text)),
+    ...[
+      GOAL_LABEL[profile.goal], `${fmtNum(t.kcal)} kcal / day`, DIET_LABEL[profile.diet],
+      profile.budget && `${fmtMoney(profile.budget)} / week`,
+      // Which planner made this plan; only worth a chip when AI is on (it can fall back).
+      (config?.ai || r.source === 'ai') && (r.source === 'ai' ? 'Planned by AI' : 'Built-in planner'),
+    ].filter(Boolean).map((text) => el('span', {}, text)),
   );
-  const notices = [];
-  if (r.warning) notices.push(r.warning);
-  if (t.floored) notices.push(`Your target was raised to the ${config?.minKcal ?? 1200} kcal/day safety minimum.`);
-  $('#plan-notices').replaceChildren(...notices.map((n) => el('p', { class: 'notice', role: 'status' }, n)));
+  $('#plan-notices').replaceChildren(...planNotices(r, plan));
+  flash = null;
   $('#plan-summary').hidden = !r.summary;
   $('#plan-summary').textContent = r.summary || '';
 
@@ -324,28 +416,29 @@ function renderHome() {
   const C = 2 * Math.PI * 50;
   const frac = Math.min(d.totals.kcal / t.kcal, 1);
   $('#ring-fill').setAttribute('stroke-dasharray', `${(C * frac).toFixed(1)} ${C.toFixed(1)}`);
-  $('#ring-svg').setAttribute('aria-label', `Day ${d.day}: ${fmtNum(d.totals.kcal)} of ${fmtNum(t.kcal)} kcal`);
+  $('#ring-svg').setAttribute('aria-label', `${d.longLabel}: ${fmtNum(d.totals.kcal)} of ${fmtNum(t.kcal)} kcal`);
   $('#ring-kcal').textContent = fmtNum(d.totals.kcal);
   $('#ring-of').textContent = `of ${fmtNum(t.kcal)} kcal`;
   $('#macros').replaceChildren(
     ...[['Protein', 'protein', '#90A63B'], ['Carbs', 'carbs', '#C6A05B'], ['Fat', 'fat', '#D3B996']].map(([label, k, color]) =>
       el('div', { class: 'macro' },
-        el('div', { class: 'macro-top' }, el('span', {}, label), el('b', {}, `${Math.round(d.totals[k])} g`)),
+        el('div', { class: 'macro-top' }, el('span', {}, label), el('b', {}, `${Math.round(d.totals[k])} / ${t[k]} g`)),
         el('div', { class: 'bar', role: 'img', 'aria-label': `${label} ${Math.round(d.totals[k])} of ${t[k]} g target` },
           el('i', { style: `width:${Math.min(100, (d.totals[k] / t[k]) * 100).toFixed(0)}%;background:${color}` })),
       ),
     ),
   );
 
-  // day picker
+  // day picker: real dates ("Mon 12")
   const picker = $('#day-picker');
   picker.style.setProperty('--days', plan.days.length);
   picker.hidden = plan.days.length < 2;
   picker.replaceChildren(
-    ...plan.days.map((pd, i) =>
-      el('button', {
+    ...plan.days.map((pd, i) => {
+      const [wd, num] = pd.label.split(' ');
+      return el('button', {
         type: 'button', class: 'day-btn', role: 'tab', 'aria-selected': String(i === day), 'aria-controls': 'meals', tabindex: i === day ? '0' : '-1',
-        'aria-label': `Day ${pd.day}`,
+        'aria-label': pd.longLabel,
         onclick: () => selectDay(i),
         onkeydown: (e) => {
           const delta = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
@@ -353,25 +446,49 @@ function renderHome() {
           e.preventDefault();
           selectDay((i + delta + plan.days.length) % plan.days.length, true);
         },
-      }, el('small', {}, 'Day'), el('b', {}, String(pd.day))),
-    ),
+      }, el('small', {}, wd), el('b', {}, num));
+    }),
   );
 
-  $('#meals').setAttribute('aria-label', `Day ${d.day} meals`);
-  $('#meals').replaceChildren(
-    ...d.meals.map((m) =>
-      el('article', { class: 'meal' },
-        el('span', { class: 'tile-icon' }, svgIcon(LEAF)),
-        el('div', { class: 'meal-text' },
-          el('span', { class: 'meal-slot' }, m.slot),
-          el('h3', { class: 'meal-name' }, m.name),
-          el('span', { class: 'meal-meta' }, [`${fmtNum(m.kcal)} kcal`, `${Math.round(m.protein)} g protein`, `${m.minutes} min`, m.servings !== 1 && `×${m.servings} portion`].filter(Boolean).join(' · ')),
-        ),
+  $('#day-title').textContent = d.longLabel + (d.context.busy ? ' · busy day' : '');
+  $('#meals').setAttribute('aria-label', `${d.longLabel} meals`);
+  $('#meals').replaceChildren(...d.meals.map((m) => mealRow(plan, day, m)));
+  const buy = groceries.lines.filter((g) => g.status === 'buy');
+  $('#groceries-link-meta').textContent = buy.length
+    ? `${buy.length} item${buy.length > 1 ? 's' : ''} to buy · est. ${fmtMoney(groceries.toBuyTotal)}`
+    : 'Everything is bought or at home';
+}
+
+function mealNotes(plan, m) {
+  const notes = [];
+  if (m.context.where === 'carry') notes.push(`Take-away${m.context.microwave ? '' : ', no microwave'}`);
+  if (m.kind === 'leftover') {
+    const src = plan.days[m.leftoverOf.day];
+    notes.push(`Leftovers from ${src?.label ?? 'earlier'} ${m.leftoverOf.slot}`);
+  }
+  for (const p of m.packFor ?? []) notes.push(`Cook extra for ${plan.days[p.day]?.label ?? 'later'} ${p.slot}`);
+  if (m.kind === 'eatout') notes.push('Eating out');
+  return notes;
+}
+
+function mealRow(plan, dayIdx, m) {
+  const meta = m.kind === 'eatout'
+    ? [m.nutritionKnown && `${fmtNum(m.nutrition.kcal)} kcal`, m.cost && `about ${fmtMoney(m.cost)}`]
+    : [`${fmtNum(m.nutrition.kcal)} kcal`, `${Math.round(m.nutrition.protein)} g protein`, `${m.minutes} min`, m.servings !== 1 && `×${fmtAmount(m.servings)} portion`];
+  const notes = mealNotes(plan, m);
+  return el('article', { class: 'meal' },
+    el('button', { type: 'button', class: 'meal-open', 'aria-haspopup': 'dialog', onclick: (e) => openMeal(dayIdx, m.slot, e.currentTarget) },
+      el('span', { class: 'tile-icon' }, svgIcon(LEAF)),
+      el('span', { class: 'meal-text' },
+        el('span', { class: 'meal-slot' }, m.slot),
+        el('span', { class: 'meal-name' }, m.name),
+        el('span', { class: 'meal-meta' }, meta.filter(Boolean).join(' · ')),
+        notes.length > 0 && el('span', { class: 'meal-notes' }, notes.join(' · ')),
+        m.conflicts.length > 0 && el('span', { class: 'meal-warn' }, `This meal ${m.conflicts.map((h) => RULE_TEXT[h] ?? h).join(' and ')}. Tap "My day changed" to swap it.`),
       ),
     ),
+    el('button', { type: 'button', class: 'btn-chip', 'aria-haspopup': 'dialog', 'aria-label': `My day changed: ${m.slot}`, onclick: (e) => openDayChanged(dayIdx, m.slot, e.currentTarget) }, 'My day changed'),
   );
-  const buy = buying();
-  $('#groceries-link-meta').textContent = `${buy.length} items · est. ${fmtMoney(sum(buy))}`;
 }
 
 function selectDay(i, focus = false) {
@@ -381,24 +498,222 @@ function selectDay(i, focus = false) {
   if (focus) $$('#day-picker .day-btn')[i]?.focus();
 }
 
+// ================= Panel (recipe details, "my day changed") =================
+let panelReturn = null;
+function openPanel({ eyebrow, title, body, foot = [], opener }) {
+  panelReturn = opener ?? document.activeElement;
+  $('#pn-eyebrow').textContent = eyebrow ?? '';
+  $('#pn-title').textContent = title;
+  $('#pn-body').replaceChildren(...[body].flat().filter(Boolean));
+  $('#pn-body').scrollTop = 0;
+  setPanelFoot(foot);
+  showError($('#pn-error'), null);
+  if ($('#panel').hidden) {
+    $('#panel').hidden = false;
+    $('.app').inert = true;
+  }
+  $('#pn-title').focus();
+}
+function setPanelFoot(buttons) {
+  const list = buttons.filter(Boolean);
+  $('#pn-foot').replaceChildren(...list);
+  $('#pn-foot').hidden = !list.length;
+  $('#pn-foot').classList.toggle('single', list.length === 1);
+}
+function closePanel() {
+  if ($('#panel').hidden) return;
+  $('#panel').hidden = true;
+  $('.app').inert = false;
+  const back = panelReturn?.isConnected && panelReturn.offsetParent !== null ? panelReturn : $('#h-home');
+  back?.focus();
+}
+const btn = (label, cls, onclick, attrs = {}) => el('button', { type: 'button', class: `btn ${cls}`, onclick, ...attrs }, label);
+
+// ---------- recipe details ----------
+function ingredientList(items) {
+  return el('ul', { class: 'ingredients' }, items.map(({ id, qty }) => el('li', {}, el('b', {}, fmtQty(id, qty)), el('span', {}, INGREDIENTS[id].name))));
+}
+function nutritionGrid(n, known = true) {
+  return el('dl', { class: 'nut-grid' },
+    [['kcal', 'Calories', ''], ['protein', 'Protein', ' g'], ['carbs', 'Carbs', ' g'], ['fat', 'Fat', ' g']].map(([k, label, unit]) =>
+      el('div', {}, el('dt', {}, label), el('dd', {}, known ? `${fmtNum(n[k])}${unit}` : '—'))));
+}
+
+function openMeal(dayIdx, slot, opener) {
+  const plan = view.plan;
+  const day = plan.days[dayIdx];
+  const m = day.meals.find((x) => x.slot === slot);
+  if (!m) return;
+  const eyebrow = `${day.longLabel} · ${slot}`;
+  const changed = btn('My day changed', 'btn-outline', () => openDayChanged(dayIdx, slot, opener));
+  const close = btn('Done', 'btn-primary', closePanel);
+  if (m.kind === 'eatout') {
+    return openPanel({ eyebrow, title: m.name, opener, foot: [changed, close], body: [
+      el('p', { class: 'lede' }, `You're eating out for this meal${m.cost ? `, about ${fmtMoney(m.cost)}` : ''}.`),
+      nutritionGrid(m.nutrition, m.nutritionKnown),
+      !m.nutritionKnown && el('p', { class: 'fine' }, "Calories weren't entered, so this meal isn't counted in the day's totals."),
+    ] });
+  }
+  const r = m.recipe;
+  const facts = [
+    `${m.minutes} min${m.kind === 'leftover' ? (m.minutes ? ' to reheat' : ', ready to eat') : ''}`,
+    `${fmtAmount(m.servings)} portion${m.servings === 1 ? '' : 's'}`,
+    m.kind !== 'leftover' && (r.equipment.length ? r.equipment.map((e) => e.split('|').map((x) => EQUIPMENT_LABEL[x]).join(' or ')).join(', ') : 'No cooking gear'),
+    m.kind !== 'leftover' && (r.skill > 1 ? 'Some cooking' : 'Easy'),
+    r.portable && 'Packs well',
+  ].filter(Boolean);
+  const extra = (m.packFor ?? []).reduce((s, p) => s + p.servings, 0);
+  const body = [
+    el('div', { class: 'chips-static' }, facts.map((f) => el('span', {}, f))),
+    m.conflicts.length > 0 && el('p', { class: 'notice' }, `This meal ${m.conflicts.map((h) => RULE_TEXT[h] ?? h).join(' and ')}. "My day changed" finds one that fits.`),
+    m.kind === 'leftover' && el('p', { class: 'notice' },
+      `Leftovers from ${plan.days[m.leftoverOf.day]?.longLabel ?? 'earlier'} ${m.leftoverOf.slot}. `
+      + (r.reheat === 'none' ? 'Eat it cold, straight from the fridge.' : 'Reheat until steaming hot (165°F / 74°C).')),
+    el('h3', { class: 'panel-h' }, 'This meal'),
+    nutritionGrid(m.nutrition),
+    el('p', { class: 'fine' }, `About ${fmtMoney(m.cost)} of ingredients (estimated prices).`),
+    el('h3', { class: 'panel-h' }, m.kind === 'leftover' ? 'What you are eating' : extra ? `Ingredients to cook ${fmtAmount(m.servings + extra)} portions` : 'Ingredients'),
+    ingredientList(m.kind === 'leftover' || !extra ? m.eatenItems : m.cookItems),
+    extra > 0 && el('p', { class: 'fine' }, `Eat ${fmtAmount(m.servings)} now and pack the rest for ${m.packFor.map((p) => `${plan.days[p.day]?.label} ${p.slot}`).join(' and ')}.`),
+    m.kind !== 'leftover' && el('h3', { class: 'panel-h' }, 'Steps'),
+    m.kind !== 'leftover' && el('ol', { class: 'steps' }, r.steps.map((st) => el('li', {}, st))),
+    el('h3', { class: 'panel-h' }, 'Storage'),
+    el('ul', { class: 'tips' }, storageTips(r).map((tip) => el('li', {}, tip))),
+  ];
+  openPanel({ eyebrow, title: m.name, body, opener, foot: [changed, close] });
+}
+
+// ---------- "my day changed" ----------
+function openDayChanged(dayIdx, slot, opener) {
+  const day = view.plan.days[dayIdx];
+  const m = day.meals.find((x) => x.slot === slot);
+  if (!m) return;
+  const choose = (reason) => {
+    if (reason === 'missing') return pickMissing(dayIdx, slot, m, opener);
+    if (reason === 'eatout') return eatOutForm(dayIdx, slot, m, opener);
+    showAlternatives(dayIdx, slot, m, reason, null, opener);
+  };
+  openPanel({
+    eyebrow: `${day.longLabel} · ${slot}`, title: 'My day changed', opener,
+    body: [
+      el('p', { class: 'lede' }, `Instead of ${m.name}. FitBite keeps your diet and allergies, and shows what changes in your day and your shopping.`),
+      el('div', { class: 'reason-list' }, Object.entries(CHANGE_REASONS).map(([key, r]) =>
+        el('button', { type: 'button', class: 'reason', onclick: () => choose(key) }, r.label, svgIcon('<svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>')))),
+    ],
+    foot: [btn('Cancel', 'btn-outline', closePanel)],
+  });
+}
+
+function pickMissing(dayIdx, slot, m, opener) {
+  const items = m.kind === 'eatout' ? [] : m.eatenItems;
+  if (!items.length) return showAlternatives(dayIdx, slot, m, 'other', null, opener);
+  openPanel({
+    eyebrow: 'My day changed', title: 'Which ingredient is missing?', opener,
+    body: el('div', { class: 'reason-list' }, items.map(({ id }) =>
+      el('button', { type: 'button', class: 'reason', onclick: () => showAlternatives(dayIdx, slot, m, 'missing', id, opener) }, INGREDIENTS[id].name))),
+    foot: [btn('Back', 'btn-outline', () => openDayChanged(dayIdx, slot, opener))],
+  });
+}
+
+function showAlternatives(dayIdx, slot, m, reason, ingredientId, opener) {
+  const r = state.result;
+  const alts = alternativesFor(r.plan, r.profile, groceryState(), dayIdx, slot, reason, { ingredientId });
+  let picked = alts[0] ?? null;
+  const back = btn('Back', 'btn-outline', () => openDayChanged(dayIdx, slot, opener));
+  if (!alts.length) {
+    return openPanel({
+      eyebrow: CHANGE_REASONS[reason].label, title: 'Nothing fits that', opener,
+      body: el('p', { class: 'lede' }, `No recipe fits ${reason === 'missing' ? 'without that ingredient' : 'that much time'} along with your diet and routine. Try "I want another option", or log that you're eating out.`),
+      foot: [back],
+    });
+  }
+  const confirm = btn('Swap meal', 'btn-primary', () => {
+    if (!picked) return;
+    const { slot: s, recipeId, servings, kind, leftoverOf } = picked;
+    commitChange(dayIdx, slot, m, reason, { slot: s, recipeId, servings, kind, ...(leftoverOf && { leftoverOf }) },
+      `Swapped to ${picked.name}. ${picked.extraSpend > 0 ? `Your grocery list grew by about ${fmtMoney(picked.extraSpend)}.` : 'No extra shopping needed.'}`);
+  });
+  openPanel({
+    eyebrow: CHANGE_REASONS[reason].label, title: 'Pick a swap', opener,
+    body: [
+      el('p', { class: 'lede' }, `Instead of ${m.name}:`),
+      el('div', { class: 'alt-list', role: 'radiogroup', 'aria-label': 'Alternatives' }, alts.map((a, i) =>
+        el('label', { class: 'alt' },
+          el('input', { type: 'radio', name: 'alt', checked: i === 0, onchange: () => { picked = a; } }),
+          el('span', { class: 'alt-card' },
+            el('b', {}, a.name),
+            el('span', { class: 'meal-meta' }, [`${fmtNum(a.nutrition.kcal)} kcal`, `${Math.round(a.nutrition.protein)} g protein`, `${a.minutes} min`,
+              a.extraSpend > 0 ? `+${fmtMoney(a.extraSpend)} shopping` : 'no extra shopping'].join(' · ')),
+            el('small', {}, a.reason))))),
+    ],
+    foot: [back, confirm],
+  });
+}
+
+function eatOutForm(dayIdx, slot, m, opener) {
+  const name = el('input', { name: 'eo-name', autocomplete: 'off', maxlength: '60', placeholder: 'e.g. Campus cafeteria' });
+  const cost = el('input', { name: 'eo-cost', type: 'number', inputmode: 'decimal', min: '0', max: '200', step: '0.5', placeholder: '8' });
+  const kcal = el('input', { name: 'eo-kcal', type: 'number', inputmode: 'numeric', min: '0', max: '3000', step: '10', placeholder: 'optional' });
+  const save = btn('Log it', 'btn-primary', () => {
+    const c = cost.value === '' ? 0 : Number(cost.value);
+    const k = kcal.value === '' ? null : Number(kcal.value);
+    if (!(c >= 0 && c <= 200)) return showError($('#pn-error'), 'Enter a cost between $0 and $200.');
+    if (k != null && !(k >= 0 && k <= 3000)) return showError($('#pn-error'), 'Enter calories between 0 and 3,000, or leave it empty.');
+    const label = name.value.trim().slice(0, 60) || 'Eating out';
+    const eatout = { name: label, cost: Math.round(c * 100) / 100, ...(k != null && { kcal: Math.round(k), protein: 0, carbs: 0, fat: 0 }) };
+    commitChange(dayIdx, slot, m, 'eatout', { slot, kind: 'eatout', eatout },
+      `${cap(slot)} is now "${label}". Its ingredients came off your grocery list where nothing else needs them.`);
+  });
+  openPanel({
+    eyebrow: CHANGE_REASONS.eatout.label, title: 'Eating out', opener,
+    body: [
+      el('p', { class: 'lede' }, `Replaces ${m.name}. FitBite drops its ingredients from your shopping and counts what you spend.`),
+      el('label', {}, 'Where or what', name),
+      el('div', { class: 'fields' }, el('label', {}, 'About how much ($)', cost), el('label', {}, 'Calories, if you know', kcal)),
+    ],
+    foot: [btn('Back', 'btn-outline', () => openDayChanged(dayIdx, slot, opener)), save],
+  });
+}
+
+function commitChange(dayIdx, slot, old, reason, meal, message) {
+  const r = state.result;
+  r.plan = applyMealChange(r.plan, dayIdx, slot, meal);
+  state.changes = [...(state.changes ?? []), { at: new Date().toISOString(), date: r.plan.days[dayIdx].date, slot, reason, from: old.recipeId ?? old.kind, to: meal.recipeId ?? meal.kind }].slice(-200);
+  save();
+  flash = message;
+  closePanel();
+  render();
+  $$('#meals .meal-open')[r.plan.days[dayIdx].meals.findIndex((x) => x.slot === slot)]?.focus();
+}
+
 // ================= Groceries =================
-const buying = () => state.result.groceries.filter((g) => !state.owned.includes(g.ingredientId));
-const sum = (items) => items.reduce((s, g) => s + g.estPrice, 0);
 const expanded = new Set();
 
 function qtyText(g) {
+  const need = `need ${fmtQty(g.ingredientId, g.need)}`;
+  if (g.status === 'have') return g.have == null ? `${need} · you have it` : `${need} · you have ${fmtQty(g.ingredientId, g.have)}`;
+  if (g.status === 'bought') return `${need} · bought ${g.boughtPacks} × ${g.packSize === 1 ? '' : `${g.packSize} ${g.unit} `}pack`.replace(' pack', g.packSize === 1 ? '' : ' pack');
   if (g.packSize === 1) return `${g.packs} ${g.unit === 'each' ? 'each' : g.unit + (g.packs > 1 ? 's' : '')}`;
-  return `${g.packs} × ${g.packSize} ${g.unit} · need ${+g.quantity.toFixed(2)} ${g.unit}`;
+  return `${g.packs} × ${g.packSize} ${g.unit} · ${need}`;
+}
+
+function toggleHave(id, have) {
+  state.have = have ? [...new Set([...state.have, id])] : state.have.filter((x) => x !== id);
+  save();
+  derive();
+  renderGroceries();
+  renderHome();
 }
 
 function renderGroceries() {
   const r = state.result;
   if (!r) return;
+  const g = view.groceries;
   const groups = new Map();
   const rank = (c) => (AISLE_ORDER.includes(c) ? AISLE_ORDER.indexOf(c) : AISLE_ORDER.length);
-  for (const g of [...r.groceries].sort((a, b) => rank(a.category) - rank(b.category))) groups.set(g.category, [...(groups.get(g.category) ?? []), g]);
+  for (const line of [...g.lines].sort((a, b) => rank(a.category) - rank(b.category))) groups.set(line.category, [...(groups.get(line.category) ?? []), line]);
   const days = r.plan.days.length;
-  $('#groceries-sub').textContent = `${r.groceries.length} items for ${days} day${days > 1 ? 's' : ''}. Untick anything you already have.`;
+  $('#groceries-sub').textContent = `${g.lines.length} ingredients for ${days} day${days > 1 ? 's' : ''}. Untick anything you already have.`;
   const { allergies = [], diet = 'omnivore' } = r.profile ?? {};
   $('#label-warning').hidden = !allergies.length && diet === 'omnivore';
 
@@ -409,20 +724,28 @@ function renderGroceries() {
       const id = `aisle-${category.replace(/\W+/g, '-').toLowerCase()}`;
       return el('section', { class: 'aisle', 'aria-labelledby': id },
         el('div', { class: 'aisle-head' }, el('h2', { id }, category), el('small', {}, `${items.length} item${items.length > 1 ? 's' : ''}`)),
-        shown.map((g) => {
-          const owned = state.owned.includes(g.ingredientId);
-          return el('label', { class: `item${owned ? ' off' : ''}` },
+        shown.map((line) => {
+          if (line.status === 'bought') {
+            return el('div', { class: 'item done-item' },
+              el('span', { class: 'pill' }, 'Bought'),
+              el('span', { class: 'item-text' }, el('span', { class: 'item-name' }, line.name), el('span', { class: 'item-qty' }, qtyText(line))),
+              el('button', { type: 'button', class: 'link-btn', 'aria-label': `Undo bought: ${line.name}`, onclick: () => {
+                const { [line.ingredientId]: _, ...rest } = state.bought;
+                state.bought = rest;
+                save(); derive(); renderGroceries(); renderHome();
+              } }, 'Undo'));
+          }
+          const buy = line.status === 'buy';
+          return el('label', { class: `item${buy ? '' : ' off'}` },
             el('input', {
-              type: 'checkbox', checked: !owned, 'aria-label': `Buy ${g.name}`,
+              type: 'checkbox', checked: buy, 'aria-label': `Buy ${line.name}`,
               onchange: (e) => {
-                state.owned = e.target.checked ? state.owned.filter((x) => x !== g.ingredientId) : [...state.owned, g.ingredientId];
-                save();
-                renderGroceries();
-                $(`#grocery-list input[aria-label="Buy ${CSS.escape(g.name)}"]`)?.focus();
+                toggleHave(line.ingredientId, !e.target.checked);
+                $(`#grocery-list input[aria-label="Buy ${CSS.escape(line.name)}"]`)?.focus();
               },
             }),
-            el('span', { class: 'item-text' }, el('span', { class: 'item-name' }, g.name), el('span', { class: 'item-qty' }, qtyText(g))),
-            el('span', { class: 'item-price' }, fmtMoney(g.estPrice)),
+            el('span', { class: 'item-text' }, el('span', { class: 'item-name' }, line.name), el('span', { class: 'item-qty' }, qtyText(line))),
+            el('span', { class: 'item-price' }, buy ? fmtMoney(line.estPrice) : 'Have it'),
           );
         }),
         items.length > PREVIEW_ITEMS + 1 && el('button', {
@@ -432,19 +755,33 @@ function renderGroceries() {
       );
     }),
   );
-  const buy = buying();
+
+  // Two different numbers: what you pay at the store (whole packs) vs what this week's meals use.
+  const leftover = g.leftovers.reduce((s, l) => s + l.value, 0);
+  const rows = [
+    ['To buy now', fmtMoney(g.toBuyTotal), 'Whole packs, estimated prices'],
+    g.boughtTotal > 0 && ['Already bought', fmtMoney(g.boughtTotal)],
+    ['Food eaten this week', fmtMoney(g.consumedCost), `About ${fmtMoney(g.perMeal)} per meal`],
+    g.eatOutTotal > 0 && ['Eating out', fmtMoney(g.eatOutTotal)],
+    leftover >= 0.5 && ['Left for next week', fmtMoney(leftover), g.leftovers.slice(0, 3).map((l) => l.name).join(', ')],
+    g.budget != null && [g.remaining >= 0 ? 'Left in budget' : 'Over budget', fmtMoney(Math.abs(g.remaining)), `Weekly budget ${fmtMoney(g.budget)}`],
+  ].filter(Boolean);
+  $('#cost-summary').replaceChildren(...rows.map(([label, value, sub]) =>
+    el('div', { class: label === 'Over budget' ? 'over' : null }, el('dt', {}, label, sub && el('small', {}, sub)), el('dd', {}, value))));
+
+  const buy = g.lines.filter((l) => l.status === 'buy');
   $('#total-label').textContent = `Estimated · ${buy.length} item${buy.length === 1 ? '' : 's'}`;
-  $('#grocery-total').textContent = fmtMoney(sum(buy));
+  $('#grocery-total').textContent = fmtMoney(g.toBuyTotal);
 }
 
 let checkingOut = false;
 async function onCheckout() {
   if (checkingOut) return;
   const button = $('#checkout');
-  const buy = buying();
+  const buy = view.groceries.lines.filter((l) => l.status === 'buy');
   showError($('#checkout-error'), null);
   if (!buy.length) {
-    showError($('#checkout-error'), 'Nothing to buy. Every item is unticked.');
+    showError($('#checkout-error'), 'Nothing to buy. Everything is bought or marked as at home.');
     return $('#checkout-error').scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
   checkingOut = true;
@@ -452,7 +789,8 @@ async function onCheckout() {
   button.textContent = 'Sending…';
   try {
     const { diet, allergies } = state.result.profile ?? {};
-    const r = await api('/api/checkout', { provider: $('#provider').value, items: buy.map(({ ingredientId, quantity }) => ({ ingredientId, quantity })), dietary: { diet, allergies } }, { timeoutMs: 30_000 });
+    const items = buy.map((l) => ({ ingredientId: l.ingredientId, quantity: l.packs * l.packSize }));
+    const r = await api('/api/checkout', { provider: $('#provider').value, items, dietary: { diet, allergies } }, { timeoutMs: 30_000 });
     showDone(r, buy);
   } catch (err) {
     showError($('#checkout-error'), err.message);
@@ -465,20 +803,24 @@ async function onCheckout() {
 }
 
 // ================= Cart ready =================
+let pendingBuy = null; // lines sent to the cart, marked as bought once the user confirms
 function showDone(r, buy) {
   const plan = state.result.plan;
   const meals = plan.days.reduce((s, d) => s + d.meals.length, 0);
   const link = r.type === 'link';
+  const total = buy.reduce((s, l) => s + l.estPrice, 0);
+  pendingBuy = buy;
   $('#h-done').textContent = link ? 'Your list is on Instacart' : 'Your demo cart is ready';
   $('#done-sub').textContent = link
     ? 'Pick your store, check the labels and pay there. Nothing is charged until you check out.'
-    : 'This is a simulated store. With Instacart connected, you would pick a store and pay there.';
+    : 'This is a simulated store: nothing is ordered or charged. With Instacart connected, you would pick a store and pay there.';
   $('#done-items').textContent = String(buy.length);
   $('#done-meals').textContent = `${meals} over ${plan.days.length} day${plan.days.length > 1 ? 's' : ''}`;
-  $('#done-total').textContent = fmtMoney(link ? sum(buy) : r.total);
+  $('#done-total').textContent = fmtMoney(link ? total : r.total);
   $('#done-actions').replaceChildren(...[
     link && el('a', { class: 'btn btn-gold', href: r.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open Instacart', svgIcon('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>')),
-    el('button', { type: 'button', class: 'btn btn-outline', onclick: hideDone }, 'Back to home'),
+    el('button', { type: 'button', class: link ? 'btn btn-outline' : 'btn btn-gold', onclick: () => hideDone(true) }, "I've bought these"),
+    el('button', { type: 'button', class: 'btn btn-outline', onclick: () => hideDone(false) }, 'Back to home'),
   ].filter(Boolean));
   $('#done-details').hidden = link;
   if (!link) $('#done-lines').replaceChildren(...r.items.map((i) => el('tr', {}, el('td', {}, `${i.packs} × ${i.name}`), el('td', {}, fmtMoney(i.price)))));
@@ -488,7 +830,16 @@ function showDone(r, buy) {
   $('#h-done').focus();
 }
 
-function hideDone() {
+function hideDone(bought = false) {
+  if (bought && pendingBuy) {
+    const next = { ...state.bought };
+    for (const l of pendingBuy) next[l.ingredientId] = (next[l.ingredientId] ?? 0) + l.packs;
+    state.bought = next;
+    flash = 'Marked as bought. Swaps now show only the extra shopping they need.';
+    save();
+    render();
+  }
+  pendingBuy = null;
   $('#view-done').hidden = true;
   $('.app').inert = false;
   showView('home');
@@ -602,6 +953,7 @@ function showView(name) {
 }
 
 function render() {
+  derive();
   $('.tab[data-view="groceries"]').disabled = !state.result;
   renderHome();
   renderGroceries();
@@ -625,9 +977,12 @@ async function init() {
   $('#wizard').addEventListener('click', (e) => e.target.id === 'wizard' && !building && closeWizard());
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    if (!$('#wizard').hidden) closeWizard();
+    if (!$('#panel').hidden) closePanel();
+    else if (!$('#wizard').hidden) closeWizard();
     else if (!$('#view-done').hidden) hideDone();
   });
+  $('#pn-close').addEventListener('click', closePanel);
+  $('#panel').addEventListener('click', (e) => e.target.id === 'panel' && closePanel());
   $('#checkout').addEventListener('click', onCheckout);
 
   try {
@@ -637,7 +992,7 @@ async function init() {
     return showError($('#checkout-error'), `Could not load app settings: ${err.message}`);
   }
   $('#ai-status').textContent = config.ai ? 'AI planner on' : 'Built-in planner';
-  $('#ai-status').title = config.ai ? `Plans by ${config.model}` : 'Set GROQ_API_KEY to plan with AI';
+  $('#ai-status').title = config.ai ? 'Plans are picked by AI, then checked by FitBite' : "Plans come from FitBite's built-in planner";
   $('#allergies').replaceChildren(
     ...config.allergens.map((a) => el('label', {}, el('input', { type: 'checkbox', name: 'allergies', value: a }), el('span', {}, ALLERGEN_LABEL[a] ?? a[0].toUpperCase() + a.slice(1)))),
   );
