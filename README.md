@@ -1,6 +1,6 @@
 # FitBite
 
-Mobile-first web app: tell it about yourself and it builds a meal plan, turns the plan into a grocery list, and sends that list to a real grocery cart. Install it to your phone home screen from the browser menu.
+Mobile-first web app that helps students eat within their budget, their time and a routine that changes. Tell it about yourself and your week, and it builds a meal plan, turns the plan into a grocery list, and sends that list to a real grocery cart. When the day doesn't go as planned, "My day changed" swaps a meal and updates the shopping. Install it to your phone home screen from the browser menu.
 
 See [PLAN.md](PLAN.md) for the feasibility analysis (which grocery APIs can do what), the architecture, and the roadmap.
 
@@ -49,18 +49,22 @@ The browser loads Clerk's script-tag SDK from your instance's Frontend API (deri
 ## Layout
 
 ```
-lib/http.mjs            request handler: /api/config, /api/plan, /api/checkout, static files
-scripts/serve.mjs       local server (npm start)
-api/index.mjs           Vercel serverless entry (same handler)
-lib/catalog.mjs         ingredients (unit, pack, price, allergens) + recipes (per-serving macros)
-lib/profile.mjs         input validation, calorie/macro targets
-lib/plan.mjs            built-in planner, skeleton validation, plan builder
-lib/auth.mjs            Clerk session verification + public sign-in config
-lib/ai.mjs              Groq planner (strict structured output constrained to allowed recipes)
-lib/grocery.mjs         aggregation, pack rounding, checkout input rebuilding
-lib/stores/             grocery providers: mock, instacart
-public/                 mobile-first single-page UI (vanilla JS, no build step, installable manifest)
-test/                   node:test suites
+lib/http.mjs              request handler: /api/config, /api/plan, /api/checkout, static files
+scripts/serve.mjs         local server (npm start)
+api/index.mjs             Vercel serverless entry (same handler)
+public/shared/catalog.mjs ingredients (unit, pack, price, nutrition, allergens) + recipes (steps,
+                          time, equipment, take-away and storage flags); used by server and browser
+public/shared/engine.mjs  planning engine, used by server and browser: practical portions, macro
+                          fitting, daily routine, budget, inventory, leftovers, validation,
+                          grocery summary and "My day changed" alternatives
+lib/catalog.mjs           re-exports the shared catalog for server code
+lib/profile.mjs           input validation (incl. routine, budget, inventory), calorie/macro targets
+lib/ai.mjs                Groq planner: picks recipes from engine-filtered lists (strict output)
+lib/auth.mjs              Clerk session verification + public sign-in config
+lib/grocery.mjs           checkout input rebuilding and pack rounding
+lib/stores/               grocery providers: mock, instacart
+public/app.js             mobile-first single-page UI (vanilla JS, no build step, installable manifest)
+test/                     node:test suites
 ```
 
 Nutrition values are approximate. This is a prototype, not medical advice.

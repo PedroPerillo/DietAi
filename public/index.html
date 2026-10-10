@@ -48,6 +48,7 @@
           </div>
           <h1 class="display">Plan your week</h1>
           <p class="lede">Tell us a little about you. FitBite builds a week of meals around your goal and fills your grocery cart.</p>
+          <p id="outdated-note" class="notice" hidden>FitBite has been updated with recipes, budgets and "My day changed". Your answers are saved: tap below to rebuild your plan.</p>
           <button type="button" class="btn btn-primary btn-block" data-open-wizard>Build my plan</button>
         </div>
 
@@ -81,6 +82,7 @@
           </div>
           <div class="home-col home-day">
           <div id="day-picker" class="day-picker" role="tablist" aria-label="Days"></div>
+          <h2 id="day-title" class="day-title"></h2>
           <section id="meals" class="meals" aria-live="polite"></section>
           </div>
           </div>
@@ -103,8 +105,9 @@
         <div class="groceries-layout">
         <div id="grocery-list"></div>
         <aside class="checkout-panel" aria-label="Checkout">
+        <dl id="cost-summary" class="cost-summary" aria-label="Costs this week"></dl>
         <label class="field">Send to <select id="provider"></select></label>
-        <p class="fine">Prices are estimates. You review and pay on the store's site.</p>
+        <p class="fine">Prices are estimates, not live store prices. You review and pay on the store's site.</p>
         <p id="checkout-error" class="error" role="alert" hidden></p>
         <div class="checkoutbar">
           <div class="total"><small id="total-label">Estimated</small><strong id="grocery-total">$0.00</strong></div>
@@ -146,6 +149,23 @@
     </div>
   </section>
 
+  <!-- ===== Meal panel: recipe details and "My day changed" (bottom sheet) ===== -->
+  <div id="panel" class="sheet-backdrop" hidden>
+    <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="pn-title">
+      <div class="handle" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <span id="pn-eyebrow" class="eyebrow"></span>
+        <button type="button" class="icon-btn" id="pn-close" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+      </div>
+      <h2 id="pn-title" class="display panel-title" tabindex="-1"></h2>
+      <div id="pn-body" class="sheet-body panel-body"></div>
+      <p id="pn-error" class="error" role="alert" hidden></p>
+      <div id="pn-foot" class="sheet-foot"></div>
+    </section>
+  </div>
+
   <!-- ===== New plan wizard (bottom sheet) ===== -->
   <div id="wizard" class="sheet-backdrop" hidden>
     <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="wz-title">
@@ -156,7 +176,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
         </button>
       </div>
-      <div class="progress" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+      <div class="progress" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
       <h2 id="wz-title" class="display" tabindex="-1">About you</h2>
       <p id="wz-sub" class="lede"></p>
 
@@ -217,6 +237,73 @@
         </div>
 
         <div class="step" data-step="4" hidden>
+          <label class="field">Weekly food budget (USD)
+            <span class="suffix prefix"><span>$</span><input name="budget" type="number" inputmode="decimal" min="10" max="1000" step="5" placeholder="No limit" /></span>
+          </label>
+          <fieldset>
+            <legend>Meals each day</legend>
+            <div class="chips" id="meals-pick">
+              <label><input type="checkbox" name="meals" value="breakfast" checked /><span>Breakfast</span></label>
+              <label><input type="checkbox" name="meals" value="lunch" checked /><span>Lunch</span></label>
+              <label><input type="checkbox" name="meals" value="dinner" checked /><span>Dinner</span></label>
+              <label><input type="checkbox" name="meals" value="snack" checked /><span>Snack</span></label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Your kitchen</legend>
+            <div class="chips">
+              <label><input type="checkbox" name="equipment" value="stove" checked /><span>Stove</span></label>
+              <label><input type="checkbox" name="equipment" value="microwave" checked /><span>Microwave</span></label>
+              <label><input type="checkbox" name="equipment" value="oven" checked /><span>Oven</span></label>
+              <label><input type="checkbox" name="equipment" value="airfryer" /><span>Air fryer</span></label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Cooking</legend>
+            <div class="seg" role="radiogroup" aria-label="Cooking skill">
+              <label><input type="radio" name="skill" value="beginner" /><span>Beginner</span></label>
+              <label><input type="radio" name="skill" value="comfortable" checked /><span>Comfortable</span></label>
+              <label><input type="radio" name="skill" value="confident" /><span>Confident</span></label>
+            </div>
+          </fieldset>
+          <label class="field">Meals you prefer
+            <select name="style">
+              <option value="balanced" selected>A mix</option>
+              <option value="quick">As quick as possible</option>
+              <option value="homemade">Home-cooked</option>
+              <option value="bought">Mostly ready-to-eat from the store</option>
+            </select>
+          </label>
+          <fieldset>
+            <legend>Weekday lunch <small>Monday to Friday</small></legend>
+            <div class="seg" role="radiogroup" aria-label="Weekday lunch">
+              <label><input type="radio" name="lunchWhere" value="home" checked /><span>At home</span></label>
+              <label><input type="radio" name="lunchWhere" value="carry" /><span>I take it with me</span></label>
+            </div>
+          </fieldset>
+          <div class="carry-opts chips" hidden>
+            <label><input type="checkbox" name="lunchMicrowave" /><span>Microwave there</span></label>
+            <label><input type="checkbox" name="lunchFridge" /><span>Fridge there</span></label>
+          </div>
+          <label class="field">Time for weekday lunch
+            <select name="lunchMinutes">
+              <option value="5">5 minutes</option>
+              <option value="10">10 minutes</option>
+              <option value="20" selected>20 minutes</option>
+              <option value="30">30 minutes or more</option>
+            </select>
+          </label>
+          <fieldset>
+            <legend>Busy days <small>only quick meals</small></legend>
+            <div class="chips weekdays" data-weekdays="busyDays"></div>
+          </fieldset>
+          <fieldset>
+            <legend>Prep days <small>cook extra for later</small></legend>
+            <div class="chips weekdays" data-weekdays="prepDays"></div>
+          </fieldset>
+        </div>
+
+        <div class="step" data-step="5" hidden>
           <div class="row-setting">
             <span id="days-label">Days to plan</span>
             <div class="stepper" role="group" aria-labelledby="days-label">
@@ -226,10 +313,10 @@
             </div>
             <input type="hidden" name="days" value="7" />
           </div>
-          <div class="row-setting">
-            <label for="snacks" id="snack-label">Daily snack</label>
-            <input id="snacks" name="snacks" type="checkbox" role="switch" class="switch" checked />
-          </div>
+          <fieldset>
+            <legend>Already at home <small>FitBite uses these first</small></legend>
+            <div class="chips" id="pantry"></div>
+          </fieldset>
           <label class="field">Anything else? <textarea name="notes" rows="2" maxlength="500" placeholder="e.g. quick lunches, I meal-prep on Sundays"></textarea></label>
           <div class="plan-uses"><span class="eyebrow">Your plan will use</span><div id="plan-uses"></div></div>
         </div>

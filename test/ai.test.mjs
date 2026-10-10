@@ -31,22 +31,25 @@ after(() => {
 // node:test run the after() hook early and shut the fake down mid-file.
 const { aiSkeleton, PlannerError } = await import('../lib/ai.mjs');
 const { parseProfile, computeTargets } = await import('../lib/profile.mjs');
+const { candidatePools } = await import('../public/shared/engine.mjs');
 const { createServer } = await import('../lib/http.mjs');
 
-const profile = parseProfile({ sex: 'female', age: 35, heightCm: 168, weightKg: 70, activity: 'light', goal: 'lose', diet: 'vegetarian', allergies: ['egg'], days: 1, snacks: false });
+const profile = parseProfile({ sex: 'female', age: 35, heightCm: 168, weightKg: 70, activity: 'light', goal: 'lose', diet: 'vegetarian', allergies: ['egg'], days: 1, snacks: false, startDate: '2026-10-12' });
 const targets = computeTargets(profile);
 // OpenAI-compatible chat completion, as Groq returns it.
 const message = (content, finish_reason = 'stop', extra = {}) => ({
   id: 'chatcmpl-1', object: 'chat.completion', model: 'openai/gpt-oss-120b',
   choices: [{ index: 0, message: { role: 'assistant', content, ...extra }, finish_reason }], usage: { prompt_tokens: 1, completion_tokens: 1 },
 });
-const day = { breakfast: { recipeId: 'overnight-oats', servings: 1.1 }, lunch: { recipeId: 'lentil-soup', servings: 1 }, dinner: { recipeId: 'chickpea-curry', servings: 1 } };
+// A valid AI answer: the first allowed recipe for each meal of day 0.
+const pools = candidatePools(profile, { startDate: profile.startDate, days: 1 });
+const day = Object.fromEntries(Object.entries(pools[0].slots).map(([slot, ids]) => [slot, ids[0]]));
 
 test('sends a constrained structured-output request and parses the plan', async () => {
-  reply = () => message(JSON.stringify({ summary: 'Simple vegetarian day.', days: [day] }));
-  const { skeleton, summary } = await aiSkeleton(profile, targets);
+  reply = () => message(JSON.stringify({ summary: 'Simple vegetarian day.', days: { d0: day } }));
+  const { choices, summary } = await aiSkeleton(profile, targets);
   assert.equal(summary, 'Simple vegetarian day.');
-  assert.equal(skeleton[0].breakfast.servings, 1); // snapped to 0.25 grid
+  assert.deepEqual(choices, [day]);
 
   const b = lastRequest.body;
   assert.equal(lastRequest.url, '/openai/v1/chat/completions');
@@ -56,12 +59,13 @@ test('sends a constrained structured-output request and parses the plan', async 
   assert.equal(b.response_format.type, 'json_schema');
   assert.equal(b.response_format.json_schema.strict, true);
   const schema = b.response_format.json_schema.schema;
-  const breakfastEnum = schema.properties.days.items.properties.breakfast.properties.recipeId.enum;
-  assert.ok(breakfastEnum.includes('overnight-oats'));
-  assert.ok(!breakfastEnum.includes('veggie-scramble'), 'egg recipes must not even be offerable');
-  assert.ok(!('snack' in schema.properties.days.items.properties));
+  const d0 = schema.properties.days.properties.d0;
+  const breakfastEnum = d0.properties.breakfast.enum;
+  assert.ok(breakfastEnum.length >= 1);
+  for (const egg of ['veggie-scramble', 'avocado-toast-egg', 'mug-omelette', 'egg-sandwich']) assert.ok(!breakfastEnum.includes(egg), `${egg} must not even be offerable`);
+  assert.ok(!('snack' in d0.properties));
   // Groq strict mode: every object lists all its properties as required and closes extras
-  const objects = [schema, schema.properties.days.items, schema.properties.days.items.properties.breakfast];
+  const objects = [schema, schema.properties.days, d0];
   for (const o of objects) {
     assert.equal(o.additionalProperties, false);
     assert.deepEqual([...o.required].sort(), Object.keys(o.properties).sort());
@@ -74,17 +78,17 @@ test('rejects refusals, truncation, malformed JSON and API errors', async () => 
   const quiet = console.error;
   console.error = () => {};
   const cases = [
-    [() => message(null, 'stop', { refusal: 'no' }), /declined/],
-    [() => message('{"days": [', 'length'), /cut off/],
-    [() => message('not json'), /malformed/],
-    [() => ({ status: 429, body: { error: { message: 'Rate limit reached' } } }), /free-tier limit/],
-    [() => ({ status: 401, body: { error: { message: 'Invalid API Key' } } }), /key was rejected/],
-    [() => ({ status: 500, body: {} }), /error \(500\)/],
+    [() => message(null, 'stop', { refusal: 'no' }), /refusal/, /declined/],
+    [() => message('{"days": [', 'length'), /cut off/, /incomplete/],
+    [() => message('not json'), /malformed/, /incomplete/],
+    [() => ({ status: 429, body: { error: { message: 'Rate limit reached' } } }), /429/, /busy/],
+    [() => ({ status: 401, body: { error: { message: 'Invalid API Key' } } }), /401/, /unavailable/],
+    [() => ({ status: 500, body: {} }), /500/, /unavailable/],
   ];
   try {
-    for (const [r, pattern] of cases) {
+    for (const [r, pattern, userPattern] of cases) {
       reply = r;
-      await assert.rejects(aiSkeleton(profile, targets), (e) => e instanceof PlannerError && pattern.test(e.message), String(pattern));
+      await assert.rejects(aiSkeleton(profile, targets), (e) => e instanceof PlannerError && pattern.test(e.message) && userPattern.test(e.userMessage), String(pattern));
     }
   } finally {
     console.error = quiet;
@@ -97,7 +101,7 @@ const listen = async (opts) => {
   await new Promise((r) => s.once('listening', r));
   return { s, url: `http://localhost:${s.address().port}` };
 };
-const planBody = JSON.stringify({ sex: 'female', age: 35, heightCm: 168, weightKg: 70, activity: 'light', goal: 'lose', diet: 'vegetarian', allergies: ['egg'], days: 1, snacks: false });
+const planBody = JSON.stringify({ sex: 'female', age: 35, heightCm: 168, weightKg: 70, activity: 'light', goal: 'lose', diet: 'vegetarian', allergies: ['egg'], days: 1, snacks: false, startDate: '2026-10-12' });
 const postPlan = (url, signal) => fetch(`${url}/api/plan`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: planBody, signal });
 
 const within = (promise, ms, message) =>
@@ -123,7 +127,7 @@ test('cancels the AI call when the browser disconnects', async () => {
 });
 
 test('rate-limits plan requests when AI is on', async () => {
-  reply = () => message(JSON.stringify({ summary: '', days: [day] }));
+  reply = () => message(JSON.stringify({ summary: '', days: { d0: day } }));
   const { s, url } = await listen({ planRateLimit: 2 });
   try {
     for (let i = 0; i < 2; i++) {
