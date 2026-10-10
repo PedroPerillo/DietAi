@@ -2,6 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { AuthError, frontendApiFromKey, publicAuthConfig, verifyRequest } from '../lib/auth.mjs';
 import { createServer } from '../lib/http.mjs';
+import { grocerySummary, hydratePlan } from '../public/shared/engine.mjs';
 
 const keyFor = (host, env = 'test') => `pk_${env}_${Buffer.from(`${host}$`).toString('base64')}`;
 const withEnv = async (vars, fn) => {
@@ -63,8 +64,9 @@ test('plan and checkout return 401 without a valid session; config stays public'
 test('a signed-in user can plan and check out', async () => {
   const plan = await post('/api/plan', profile, 'token-ana');
   assert.equal(plan.status, 200);
-  const { groceries } = await plan.json();
-  const cart = await post('/api/checkout', { provider: 'mock', items: groceries.map(({ ingredientId, quantity }) => ({ ingredientId, quantity })) }, 'token-ana');
+  const r = await plan.json();
+  const lines = grocerySummary(hydratePlan(r.plan, r.profile), {}).lines;
+  const cart = await post('/api/checkout', { provider: 'mock', items: lines.map(({ ingredientId, need }) => ({ ingredientId, quantity: need })) }, 'token-ana');
   assert.equal(cart.status, 200);
   assert.equal((await cart.json()).type, 'cart');
 });

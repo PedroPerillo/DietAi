@@ -5,6 +5,9 @@ import { createServer, generatePlan } from '../lib/http.mjs';
 import { PlannerError } from '../lib/ai.mjs';
 import { instacart, toLineItem } from '../lib/stores/instacart.mjs';
 import { lineFor } from '../lib/grocery.mjs';
+import { RECIPES_BY_ID } from '../lib/catalog.mjs';
+import { parseProfile } from '../lib/profile.mjs';
+import { candidatePools, grocerySummary, hydratePlan, validatePlan } from '../public/shared/engine.mjs';
 
 const body = { sex: 'male', age: 40, heightCm: 180, weightKg: 85, activity: 'light', goal: 'lose', diet: 'pescatarian', allergies: ['shellfish'], days: 2 };
 
@@ -24,11 +27,13 @@ const post = (path, data, raw) =>
 test('plan -> grocery list -> demo cart round trip over HTTP', async () => {
   const res = await post('/api/plan', body);
   assert.equal(res.status, 200);
-  const { plan, groceries, source, warning } = await res.json();
-  assert.equal(source, 'heuristic');
-  assert.match(warning, /AI is off/);
+  const { plan, profile, source, warning } = await res.json();
+  assert.equal(source, 'built-in');
+  assert.equal(warning, null); // no technical "AI is off" notice; the source shows the planner
   assert.equal(plan.days.length, 2);
-  assert.ok(plan.days.every((d) => d.meals.every((m) => !m.allergens.includes('shellfish'))));
+  assert.ok(plan.days.every((d) => d.meals.every((m) => !RECIPES_BY_ID[m.recipeId].allergens.includes('shellfish'))));
+  // the browser derives the grocery list with the same shared engine
+  const groceries = grocerySummary(hydratePlan(plan, profile), {}).lines.map((l) => ({ ...l, quantity: l.need }));
 
   const items = groceries.slice(1).map(({ ingredientId, quantity }) => ({ ingredientId, quantity }));
   const cart = await (await post('/api/checkout', { provider: 'mock', items })).json();
@@ -55,9 +60,24 @@ test('API errors come back as JSON with the right status', async () => {
   assert.ok(!JSON.stringify(cfg).includes('sk-'), 'config must not leak keys');
 });
 
-test('warns when the target is beyond what max portions can reach', async () => {
+test('very high targets are either reached or flagged, never silently short', async () => {
   const r = await generatePlan({ sex: 'male', age: 20, heightCm: 200, weightKg: 120, activity: 'very_active', goal: 'gain', diet: 'vegan', snacks: false, days: 7 });
-  assert.match(r.warning, /higher than these meals reach/);
+  const short = validatePlan(r.plan, r.profile, r.plan.targets).some((e) => /not within|below/.test(e));
+  if (short) assert.match(r.warning, /higher than these meals reach/);
+  else assert.equal(r.warning, null);
+});
+
+test('an AI plan that repeats a dish within a day falls back with a clear note', async () => {
+  const choices = aiChoices(body).map((d) => ({ ...d, dinner: d.lunch }));
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    const r = await generatePlan(body, { useAi: true, planner: async () => ({ choices, summary: '' }) });
+    assert.equal(r.source, 'built-in');
+    assert.match(r.warning, /repeated a dish/);
+  } finally {
+    console.error = quiet;
+  }
 });
 
 test('a malformed URL gets a 400 and does not crash the server', async () => {
@@ -65,43 +85,57 @@ test('a malformed URL gets a 400 and does not crash the server', async () => {
   assert.equal((await fetch(`${base}/api/config`)).status, 200);
 });
 
-test('uses the AI skeleton when it validates', async () => {
-  const skeleton = Array.from({ length: 2 }, () => ({
-    breakfast: { recipeId: 'overnight-oats', servings: 1 }, lunch: { recipeId: 'tuna-wrap', servings: 1.25 },
-    dinner: { recipeId: 'salmon-sweet-potato', servings: 1 }, snack: { recipeId: 'apple-pb', servings: 1 },
-  }));
-  const r = await generatePlan(body, { useAi: true, planner: async () => ({ skeleton, summary: 'Fish-forward plan.' }) });
+const aiChoices = (b) => {
+  const p = parseProfile(b);
+  return candidatePools(p, { startDate: p.startDate, days: p.days }).map((d) => {
+    const used = new Set();
+    return Object.fromEntries(Object.entries(d.slots).map(([slot, ids]) => {
+      const id = ids.find((x) => !used.has(x));
+      used.add(id);
+      return [slot, id];
+    }));
+  });
+};
+
+test('uses the AI picks when they validate; the engine sets portions', async () => {
+  const choices = aiChoices(body);
+  const r = await generatePlan(body, { useAi: true, planner: async () => ({ choices, summary: 'Fish-forward plan.' }) });
   assert.equal(r.source, 'ai');
   assert.equal(r.summary, 'Fish-forward plan.');
-  assert.equal(r.plan.days[0].meals[1].kcal, 538); // nutrition computed from catalog, not the model
   assert.equal(r.warning, null);
+  r.plan.days.forEach((d, i) => d.meals.forEach((m) => assert.equal(m.recipeId, choices[i][m.slot])));
+  const h = hydratePlan(r.plan, r.profile);
+  assert.ok(h.days.every((d) => Math.abs(d.totals.kcal - r.plan.targets.kcal) <= r.plan.targets.kcal * 0.1), 'portions fitted to the target');
 });
 
 test('falls back to the built-in planner when the AI fails, and says so', async () => {
   for (const err of [new PlannerError('The AI declined to build this plan.'), new Error('ECONNRESET')]) {
     const r = await generatePlan(body, { useAi: true, planner: async () => { throw err; } });
-    assert.equal(r.source, 'heuristic');
-    assert.match(r.warning, /built-in planner/);
+    assert.equal(r.source, 'built-in');
+    assert.match(r.warning, /built-in planner made this plan/);
+    assert.doesNotMatch(r.warning, /GROQ|API|key/i);
     assert.equal(r.plan.days.length, 2);
   }
 });
 
-test('any planner output that breaks a safety rule is replaced by the built-in plan', async () => {
-  const day = (servings, lunch = 'tuna-wrap') => ({
-    breakfast: { recipeId: 'overnight-oats', servings }, lunch: { recipeId: lunch, servings },
-    dinner: { recipeId: 'salmon-sweet-potato', servings }, snack: { recipeId: 'apple-pb', servings },
-  });
+test('AI picks that break a safety rule are replaced by the built-in plan', async () => {
+  const good = aiChoices(body);
   const cases = [
-    [[day(0.5), day(0.5)], /below the 1200 kcal floor/],
-    [[day(3), day(3)], /not within 10%/],
-    [[day(1, 'turkey-chili'), day(1, 'chickpea-salad')], /day 1 lunch: "turkey-chili" violates/], // pescatarian
-    [[day(1)], /expected 2 days/],
+    good.map((d) => ({ ...d, lunch: 'turkey-chili' })), // pescatarian user: turkey violates
+    good.map((d) => ({ ...d, snack: 'shrimp-tacos' })), // shellfish allergy, and not a snack
+    good.map((d) => ({ ...d, dinner: 'pizza' })), // unknown recipe
   ];
-  for (const [skeleton, pattern] of cases) {
-    const r = await generatePlan(body, { useAi: true, planner: async () => ({ skeleton, summary: 'bad' }) });
-    assert.equal(r.source, 'heuristic', String(pattern));
-    assert.match(r.warning, pattern);
-    assert.ok(r.plan.days.every((d) => d.totals.kcal >= 1200));
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    for (const choices of cases) {
+      const r = await generatePlan(body, { useAi: true, planner: async () => ({ choices, summary: 'bad' }) });
+      assert.equal(r.source, 'built-in');
+      assert.match(r.warning, /safety checks/);
+      assert.deepEqual(validatePlan(r.plan, r.profile, r.plan.targets, { checkBand: false }), []);
+    }
+  } finally {
+    console.error = quiet;
   }
 });
 
