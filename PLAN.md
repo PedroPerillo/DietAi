@@ -16,7 +16,7 @@
 ## How the prototype works
 
 ```
-Browser (public/)                     Server (server.mjs, Node, no framework)
+Browser (public/)                     Server (lib/http.mjs, Node, no framework)
 ─────────────────                     ───────────────────────────────────────
 profile form ── POST /api/plan ─────▶ parseProfile → computeTargets (Mifflin-St Jeor, 1200 kcal floor)
                                       heuristicSkeleton  (always: checks constraints are satisfiable; fallback)

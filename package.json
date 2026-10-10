@@ -5,10 +5,12 @@
   "type": "module",
   "description": "FitBite: AI meal planner that fills your grocery cart",
   "scripts": {
-    "start": "node --env-file-if-exists=.env server.mjs",
+    "start": "node --env-file-if-exists=.env scripts/serve.mjs",
     "test": "node --test test/*.test.mjs"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": "22.x"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0"
   }

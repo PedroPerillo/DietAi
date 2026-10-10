@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createServer, generatePlan } from '../server.mjs';
+import { createServer, generatePlan } from '../lib/http.mjs';
 import { PlannerError } from '../lib/ai.mjs';
 import { instacart, toLineItem } from '../lib/stores/instacart.mjs';
 import { lineFor } from '../lib/grocery.mjs';
@@ -210,4 +210,64 @@ test('instacart health filters go only on ingredients with a label risk', () => 
 test('instacart line items never use units Instacart lacks', () => {
   assert.deepEqual(toLineItem(lineFor('garlic', 13)).line_item_measurements, [{ quantity: 2, unit: 'head' }]);
   assert.deepEqual(toLineItem(lineFor('eggs', 5)).line_item_measurements, [{ quantity: 5, unit: 'each' }]);
+});
+
+test('the Vercel function entry serves the API with the same handler', async () => {
+  const { default: handler } = await import('../api/index.mjs');
+  const srv = http.createServer(handler).listen(0);
+  await new Promise((r) => srv.once('listening', r));
+  const url = `http://localhost:${srv.address().port}`;
+  try {
+    assert.equal((await fetch(`${url}/api/config`)).status, 200);
+    assert.equal((await fetch(`${url}/api/index?path=config`)).status, 200); // rewritten form
+    const res = await fetch(`${url}/api/plan`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).plan.days.length, 2);
+  } finally {
+    srv.close();
+  }
+});
+
+test('clientIp cannot be spoofed through x-forwarded-for', async () => {
+  const { clientIp } = await import('../lib/http.mjs');
+  const req = (headers) => ({ headers, socket: { remoteAddress: '10.0.0.9' } });
+  const env = { VERCEL: process.env.VERCEL, TRUST_PROXY: process.env.TRUST_PROXY };
+  const set = (k, v) => (v === undefined ? delete process.env[k] : (process.env[k] = v));
+  try {
+    set('VERCEL', undefined); set('TRUST_PROXY', undefined);
+    assert.equal(clientIp(req({ 'x-forwarded-for': '6.6.6.6' })), '10.0.0.9'); // no proxy trusted: socket only
+
+    set('TRUST_PROXY', '1');
+    assert.equal(clientIp(req({ 'x-forwarded-for': '6.6.6.6, 203.0.113.7' })), '203.0.113.7'); // client-sent first hop ignored
+    assert.equal(clientIp(req({ 'x-forwarded-for': '203.0.113.7' })), '203.0.113.7');
+    assert.equal(clientIp(req({})), '10.0.0.9');
+
+    set('TRUST_PROXY', undefined); set('VERCEL', '1');
+    assert.equal(clientIp(req({ 'x-vercel-forwarded-for': '198.51.100.4', 'x-forwarded-for': '6.6.6.6' })), '198.51.100.4');
+    assert.equal(clientIp(req({ 'x-real-ip': '198.51.100.5' })), '198.51.100.5');
+  } finally {
+    set('VERCEL', env.VERCEL); set('TRUST_PROXY', env.TRUST_PROXY);
+  }
+});
+
+test('rate limit holds when a client rotates a spoofed first x-forwarded-for hop', async () => {
+  const prev = { key: process.env.ANTHROPIC_API_KEY, proxy: process.env.TRUST_PROXY };
+  // AI "on" so the limiter runs. The '{}' body then fails validation (400) before any
+  // Claude call, so a 400 means "got past the limiter".
+  process.env.ANTHROPIC_API_KEY = 'test-key';
+  process.env.TRUST_PROXY = '1';
+  const srv = createServer({ planRateLimit: 2 }).listen(0);
+  await new Promise((r) => srv.once('listening', r));
+  const url = `http://localhost:${srv.address().port}/api/plan`;
+  const hit = (xff) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-forwarded-for': xff }, body: '{}' });
+  try {
+    const statuses = [];
+    for (let n = 1; n <= 6; n++) statuses.push((await hit(`10.0.0.${n}, 203.0.113.7`)).status);
+    assert.deepEqual(statuses, [400, 400, 429, 429, 429, 429]);
+    assert.equal((await hit('10.0.0.1, 203.0.113.8')).status, 400); // a different real client has its own budget
+  } finally {
+    srv.close();
+    if (prev.key === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = prev.key;
+    if (prev.proxy === undefined) delete process.env.TRUST_PROXY; else process.env.TRUST_PROXY = prev.proxy;
+  }
 });
