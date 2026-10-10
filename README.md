@@ -20,6 +20,8 @@ Copy `.env.example` to `.env` to configure it. It works with no configuration: p
 | `INSTACART_API_KEY` | Enables "Send to Instacart", which creates a shopping-list page link |
 | `INSTACART_BASE_URL` | Defaults to the dev environment `https://connect.dev.instacart.tools`. Use `https://connect.instacart.com` for production keys |
 | `PUBLIC_URL` | Optional link back to this app, shown on the Instacart page |
+| `CLERK_PUBLISHABLE_KEY` + `CLERK_SECRET_KEY` | Turn on Clerk sign-in. Both are required; with either missing the app stays open. Plan and checkout then need a signed-in user |
+| `CLERK_AUTHORIZED_PARTIES` | Comma-separated origins allowed to use session tokens, e.g. `https://fitbite-pi.vercel.app`. Private Vercel preview URLs are then rejected unless added |
 | `PORT` | Defaults to 3000 |
 | `HOST` | Defaults to `127.0.0.1`. Set `0.0.0.0` to expose it (containers, previews) |
 | `PLAN_RATE_LIMIT` | Plan requests per IP per minute when AI is on (default 10) |
@@ -35,6 +37,14 @@ The repo is ready to deploy as-is: `public/` is served from Vercel's CDN and `ap
 
 On Vercel the rate limiter uses the client IP Vercel's edge sets (`x-vercel-forwarded-for`). Elsewhere behind a proxy that appends to `x-forwarded-for` (nginx, most load balancers), set `TRUST_PROXY=1`; the last hop is used. Limits are kept per function instance, so they're best-effort; use a shared store (e.g. Upstash or Supabase) for strict limits.
 
+## Sign-in (Clerk)
+
+1. Create an application at https://dashboard.clerk.com and enable Email, Google and Apple.
+2. Copy the **Publishable key** and **Secret key** from **API keys** into `CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`. Set `CLERK_AUTHORIZED_PARTIES` to the site's origin.
+3. Development keys (`pk_test_…`) work on any domain, including `*.vercel.app`. Production keys (`pk_live_…`) need a domain you own, configured in Clerk.
+
+The browser loads Clerk's script-tag SDK from your instance's Frontend API (derived from the publishable key). The server verifies the session token from `Authorization: Bearer …` with `@clerk/backend`. Plans are still stored in the browser, now separately per signed-in user; syncing them across devices needs a database (see PLAN.md).
+
 ## Layout
 
 ```
@@ -44,6 +54,7 @@ api/index.mjs           Vercel serverless entry (same handler)
 lib/catalog.mjs         ingredients (unit, pack, price, allergens) + recipes (per-serving macros)
 lib/profile.mjs         input validation, calorie/macro targets
 lib/plan.mjs            built-in planner, skeleton validation, plan builder
+lib/auth.mjs            Clerk session verification + public sign-in config
 lib/ai.mjs              Claude planner (structured output constrained to allowed recipes)
 lib/grocery.mjs         aggregation, pack rounding, checkout input rebuilding
 lib/stores/             grocery providers: mock, instacart

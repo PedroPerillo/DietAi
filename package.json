@@ -12,6 +12,7 @@
     "node": "22.x"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.133.0"
+    "@anthropic-ai/sdk": "^0.133.0",
+    "@clerk/backend": "^3.23.2"
   }
 }

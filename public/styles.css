@@ -27,6 +27,9 @@ svg { display: block; }
 .appbar { position: sticky; top: 0; z-index: 20; height: calc(64px + env(safe-area-inset-top, 0px)); padding: env(safe-area-inset-top, 0px) 16px 0 20px;
   display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--header); }
 .wordmark { height: 36px; width: auto; }
+.appbar-right { display: flex; align-items: center; gap: 10px; }
+.user-button { display: flex; align-items: center; min-width: 0; }
+.user-button:empty { display: none; }
 .badge { font-size: .7rem; letter-spacing: .12em; text-transform: uppercase; padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(198, 160, 91, .55); color: var(--beige); white-space: nowrap; }
 
 main { flex: 1; padding: 24px 20px calc(var(--nav-h) + var(--safe-b) + 32px); }
@@ -147,6 +150,17 @@ h1.display { font-size: 36px; }
 .fab-wrap { display: flex; justify-content: center; }
 .fab { margin-top: -22px; width: 60px; height: 60px; border-radius: 50%; background: var(--gold); border: 4px solid var(--warm); display: flex; align-items: center; justify-content: center; box-shadow: 0 6px 16px rgba(15, 61, 50, .25); padding: 0; }
 .fab svg { width: 26px; height: 26px; fill: none; stroke: var(--forest); stroke-width: 2.4; stroke-linecap: round; }
+
+/* ---------- sign in ---------- */
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.signin { position: fixed; inset: 0; z-index: 45; background: var(--header); color: var(--warm); overflow-y: auto; }
+.signin-inner { max-width: 440px; min-height: 100%; margin: 0 auto; padding: calc(28px + env(safe-area-inset-top, 0px)) 16px calc(28px + var(--safe-b)); display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.signin-logo { width: 100%; max-width: 400px; min-width: 320px; height: auto; } /* brand rule: logo with slogan >=320px */
+.clerk-signin { width: 100%; display: flex; justify-content: center; }
+.clerk-signin:empty { display: none; }
+.signin-status { margin: 0; color: var(--off-white); font-size: 14px; text-align: center; }
+.signin-status.error { color: #FFB4A8; background: none; padding: 0; }
+.signin .slogan { margin-top: auto; padding-top: 24px; }
 
 /* ---------- cart ready ---------- */
 .done { position: fixed; inset: 0; z-index: 40; background: var(--header); color: var(--warm); overflow-y: auto; }
