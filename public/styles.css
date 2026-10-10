@@ -36,7 +36,7 @@ svg { display: block; }
 main { flex: 1; padding: 24px 20px calc(var(--nav-h) + var(--safe-b) + 32px); }
 .view { display: flex; flex-direction: column; gap: 18px; }
 #view-groceries { padding-bottom: calc(var(--bar-h) + 8px); }
-#home-empty, #home-plan, .home-col, .groceries-layout, .checkout-panel { display: flex; flex-direction: column; gap: 18px; }
+#home-empty, #home-plan, .home-grid, .home-col, .groceries-layout, .checkout-panel { display: flex; flex-direction: column; gap: 18px; }
 
 .skip-link { position: absolute; left: 12px; top: -60px; z-index: 100; padding: 10px 14px; border-radius: 10px; background: var(--gold); color: var(--forest); font-weight: 700; text-decoration: none; }
 .skip-link:focus { top: 12px; }
