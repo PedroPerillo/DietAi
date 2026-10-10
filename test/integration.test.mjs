@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createServer, generatePlan } from '../lib/http.mjs';
 import { PlannerError } from '../lib/ai.mjs';
-import { instacart, toLineItem } from '../lib/stores/instacart.mjs';
+import { DEMO_PAGE, instacart, toLineItem } from '../lib/stores/instacart.mjs';
 import { lineFor } from '../lib/grocery.mjs';
 import { RECIPES_BY_ID } from '../lib/catalog.mjs';
 import { parseProfile } from '../lib/profile.mjs';
@@ -45,7 +45,6 @@ test('plan -> grocery list -> demo cart round trip over HTTP', async () => {
 test('API errors come back as JSON with the right status', async () => {
   assert.equal((await post('/api/plan', null, '{nope')).status, 400);
   assert.equal((await post('/api/plan', { ...body, age: 5 })).status, 400);
-  assert.equal((await post('/api/checkout', { provider: 'instacart', items: [{ ingredientId: 'oats', quantity: 1 }] })).status, 400);
   assert.equal((await post('/api/checkout', { provider: 'amazon', items: [] })).status, 400);
   assert.equal((await post('/api/checkout', { provider: 'constructor', items: [] })).status, 400);
   assert.equal((await post('/api/plan', null, 'x'.repeat(70_000))).status, 413);
@@ -199,6 +198,44 @@ test('AI picks that break the diet or an allergy are replaced by the built-in pl
   } finally {
     console.error = quiet;
   }
+});
+
+test('instacart without a key links to the demo shopping-list page with the list in the fragment', async () => {
+  delete process.env.INSTACART_API_KEY;
+  const cfg = await (await fetch(`${base}/api/config`)).json();
+  assert.deepEqual(cfg.providers.find((p) => p.id === 'instacart'), { id: 'instacart', label: 'Instacart', ready: true, demo: true });
+  const res = await post('/api/checkout', { provider: 'instacart', items: [{ ingredientId: 'oats', quantity: 100 }, { ingredientId: 'salmon', quantity: 300 }] });
+  assert.equal(res.status, 200);
+  const r = await res.json();
+  assert.equal(r.type, 'link');
+  assert.equal(r.demo, true);
+  assert.equal(r.itemCount, 2);
+  assert.ok(r.url.startsWith(`${DEMO_PAGE}#`), r.url);
+  const payload = JSON.parse(decodeURIComponent(r.url.slice(DEMO_PAGE.length + 1)));
+  assert.equal(payload.title, 'My FitBite meal plan');
+  assert.equal(payload.back, '/');
+  assert.equal(payload.items.length, 2);
+  // the demo page shows the exact line items the real request would send, plus FitBite's estimate
+  const oats = payload.items.find((i) => i.name === lineFor('oats', 100).name);
+  assert.deepEqual(oats.line_item_measurements, toLineItem(lineFor('oats', 100)).line_item_measurements);
+  assert.equal(oats.estPrice, lineFor('oats', 100).estPrice);
+  // the mockup page itself is served
+  assert.equal((await fetch(`${base}${DEMO_PAGE}`)).status, 200);
+  assert.equal((await fetch(`${base}/instacart-demo.js`)).status, 200);
+});
+
+test('instacart demo link carries PUBLIC_URL as the way back and never leaks a key', async () => {
+  delete process.env.INSTACART_API_KEY;
+  process.env.PUBLIC_URL = 'https://fitbite.example/app';
+  try {
+    const r = await instacart.checkout([lineFor('oats', 100)], { linkbackUrl: process.env.PUBLIC_URL });
+    const payload = JSON.parse(decodeURIComponent(r.url.slice(DEMO_PAGE.length + 1)));
+    assert.equal(payload.back, 'https://fitbite.example/app');
+  } finally {
+    delete process.env.PUBLIC_URL;
+  }
+  const cfg = await (await fetch(`${base}/api/config`)).json();
+  assert.ok(!JSON.stringify(cfg).includes('demo.html#'));
 });
 
 // ---- Instacart adapter against a local fake ----
