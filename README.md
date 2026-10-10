@@ -29,15 +29,17 @@ Copy `.env.example` to `.env` to configure it. It works with no configuration: p
 The repo is ready to deploy as-is: `public/` is served from Vercel's CDN and `api/index.mjs` runs every `/api/*` route as one serverless function (120 s max, which covers the 90 s Claude deadline).
 
 1. In Vercel: **Add New → Project → Import** `PedroPerillo/DietAi`. Leave the framework preset as **Other** and the build settings blank.
-2. Under **Settings → Environment Variables**, add `ANTHROPIC_API_KEY` (and optionally `INSTACART_API_KEY`, `INSTACART_BASE_URL`, `PUBLIC_URL`). Without them, the site still works with the built-in planner and the demo cart.
-3. Deploy. Every push to `main` redeploys automatically.
+2. **Before adding a Claude key to a public site, set a monthly spend limit** on the Anthropic workspace that owns it (Console → Settings → Limits). The rate limiter is per function instance and best-effort, so it won't stop traffic spread across many IPs or instances.
+3. Under **Settings → Environment Variables**, add `ANTHROPIC_API_KEY` (and optionally `INSTACART_API_KEY`, `INSTACART_BASE_URL`, `PUBLIC_URL`). Without them, the site still works with the built-in planner and the demo cart.
+4. Deploy. Every push to `main` redeploys automatically.
 
-On Vercel the rate limiter uses the client IP from `x-forwarded-for`. Elsewhere behind a proxy, set `TRUST_PROXY=1`. Limits are kept per function instance, so they're best-effort; use a shared store (e.g. Upstash or Supabase) for strict limits.
+On Vercel the rate limiter uses the client IP Vercel's edge sets (`x-vercel-forwarded-for`). Elsewhere behind a proxy that appends to `x-forwarded-for` (nginx, most load balancers), set `TRUST_PROXY=1`; the last hop is used. Limits are kept per function instance, so they're best-effort; use a shared store (e.g. Upstash or Supabase) for strict limits.
 
 ## Layout
 
 ```
-server.mjs              request handler (/api/config, /api/plan, /api/checkout, static files) + local server
+lib/http.mjs            request handler: /api/config, /api/plan, /api/checkout, static files
+scripts/serve.mjs       local server (npm start)
 api/index.mjs           Vercel serverless entry (same handler)
 lib/catalog.mjs         ingredients (unit, pack, price, allergens) + recipes (per-serving macros)
 lib/profile.mjs         input validation, calorie/macro targets

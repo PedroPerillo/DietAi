@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createServer, generatePlan } from '../server.mjs';
+import { createServer, generatePlan } from '../lib/http.mjs';
 import { PlannerError } from '../lib/ai.mjs';
 import { instacart, toLineItem } from '../lib/stores/instacart.mjs';
 import { lineFor } from '../lib/grocery.mjs';
@@ -228,22 +228,43 @@ test('the Vercel function entry serves the API with the same handler', async () 
   }
 });
 
-test('rate limiting keys on x-forwarded-for only when behind a trusted proxy', async () => {
+test('clientIp cannot be spoofed through x-forwarded-for', async () => {
+  const { clientIp } = await import('../lib/http.mjs');
+  const req = (headers) => ({ headers, socket: { remoteAddress: '10.0.0.9' } });
+  const env = { VERCEL: process.env.VERCEL, TRUST_PROXY: process.env.TRUST_PROXY };
+  const set = (k, v) => (v === undefined ? delete process.env[k] : (process.env[k] = v));
+  try {
+    set('VERCEL', undefined); set('TRUST_PROXY', undefined);
+    assert.equal(clientIp(req({ 'x-forwarded-for': '6.6.6.6' })), '10.0.0.9'); // no proxy trusted: socket only
+
+    set('TRUST_PROXY', '1');
+    assert.equal(clientIp(req({ 'x-forwarded-for': '6.6.6.6, 203.0.113.7' })), '203.0.113.7'); // client-sent first hop ignored
+    assert.equal(clientIp(req({ 'x-forwarded-for': '203.0.113.7' })), '203.0.113.7');
+    assert.equal(clientIp(req({})), '10.0.0.9');
+
+    set('TRUST_PROXY', undefined); set('VERCEL', '1');
+    assert.equal(clientIp(req({ 'x-vercel-forwarded-for': '198.51.100.4', 'x-forwarded-for': '6.6.6.6' })), '198.51.100.4');
+    assert.equal(clientIp(req({ 'x-real-ip': '198.51.100.5' })), '198.51.100.5');
+  } finally {
+    set('VERCEL', env.VERCEL); set('TRUST_PROXY', env.TRUST_PROXY);
+  }
+});
+
+test('rate limit holds when a client rotates a spoofed first x-forwarded-for hop', async () => {
   const prev = { key: process.env.ANTHROPIC_API_KEY, proxy: process.env.TRUST_PROXY };
-  // AI "on" so the limiter runs; the planner fails fast against an unroutable base URL.
+  // AI "on" so the limiter runs. The '{}' body then fails validation (400) before any
+  // Claude call, so a 400 means "got past the limiter".
   process.env.ANTHROPIC_API_KEY = 'test-key';
-  const srv = createServer({ planRateLimit: 1 }).listen(0);
+  process.env.TRUST_PROXY = '1';
+  const srv = createServer({ planRateLimit: 2 }).listen(0);
   await new Promise((r) => srv.once('listening', r));
   const url = `http://localhost:${srv.address().port}/api/plan`;
-  const hit = (ip) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-forwarded-for': ip }, body: '{}' });
+  const hit = (xff) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-forwarded-for': xff }, body: '{}' });
   try {
-    process.env.TRUST_PROXY = '1';
-    assert.equal((await hit('1.1.1.1')).status, 400); // passes the limiter, fails validation
-    assert.equal((await hit('2.2.2.2')).status, 400); // different client, own budget
-    assert.equal((await hit('1.1.1.1')).status, 429);
-    delete process.env.TRUST_PROXY;
-    assert.equal((await hit('3.3.3.3')).status, 400); // header ignored: keyed on the socket,
-    assert.equal((await hit('4.4.4.4')).status, 429); // so a spoofed header doesn't help
+    const statuses = [];
+    for (let n = 1; n <= 6; n++) statuses.push((await hit(`10.0.0.${n}, 203.0.113.7`)).status);
+    assert.deepEqual(statuses, [400, 400, 429, 429, 429, 429]);
+    assert.equal((await hit('10.0.0.1, 203.0.113.8')).status, 400); // a different real client has its own budget
   } finally {
     srv.close();
     if (prev.key === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = prev.key;

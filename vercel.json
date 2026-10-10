@@ -10,7 +10,8 @@
   ],
   "functions": {
     "api/index.mjs": {
-      "maxDuration": 120
+      "maxDuration": 120,
+      "supportsCancellation": true
     }
   },
   "headers": [

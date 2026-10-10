@@ -30,7 +30,7 @@ after(() => {
 // node:test run the after() hook early and shut the fake down mid-file.
 const { aiSkeleton, PlannerError } = await import('../lib/ai.mjs');
 const { parseProfile, computeTargets } = await import('../lib/profile.mjs');
-const { createServer } = await import('../server.mjs');
+const { createServer } = await import('../lib/http.mjs');
 
 const profile = parseProfile({ sex: 'female', age: 35, heightCm: 168, weightKg: 70, activity: 'light', goal: 'lose', diet: 'vegetarian', allergies: ['egg'], days: 1, snacks: false });
 const targets = computeTargets(profile);
