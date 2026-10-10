@@ -219,6 +219,16 @@ test('portions stay sensible for each meal (no 3-apple snacks)', () => {
   }
 });
 
+test('open perishable packs get used up instead of thrown out', () => {
+  // Before pack-aware planning these weeks left $14-24 of meat, dairy and greens unused.
+  for (const over of [{}, { diet: 'vegetarian' }, { goal: 'lose' }]) {
+    const p = profile({ days: 7, ...over });
+    const sum = grocerySummary(hydratePlan(planFor(p), p), {});
+    const wasted = sum.leftovers.filter((l) => INGREDIENTS[l.id].perishable).reduce((s, l) => s + l.value, 0);
+    assert.ok(wasted <= 12, `${JSON.stringify(over)}: $${wasted.toFixed(2)} of perishables left over`);
+  }
+});
+
 test('ingredients you have with a quantity only cover that quantity', () => {
   const p = profile({ days: 7 });
   const h = hydratePlan(planFor(p), p);
