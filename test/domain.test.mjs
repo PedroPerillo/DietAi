@@ -4,7 +4,7 @@ import { ALLERGENS, DIET_RANK, INGREDIENTS, RECIPES, RECIPES_BY_ID, isRecipeAllo
 import { computeTargets, parseProfile, MIN_KCAL } from '../lib/profile.mjs';
 import {
   generate, hydratePlan, grocerySummary, validatePlan, portionIngredients, nutritionOf, alternativesFor, applyMealChange,
-  dayContext, prefsOf, dayLabel, MAX_SERVINGS,
+  dayContext, prefsOf, dayLabel, MAX_SERVINGS, SLOT_SERVINGS,
 } from '../public/shared/engine.mjs';
 import { parseCheckoutItems } from '../lib/grocery.mjs';
 
@@ -198,6 +198,27 @@ test('groceries: inventory, "I have it" and "bought" all reduce what is left to 
   }
 });
 
+test('food already at home is not counted as left over for next week', () => {
+  const p = profile({ days: 7, inventory: [{ id: 'oats', qty: 5000 }, { id: 'brown_rice', qty: 5000 }] });
+  const h = hydratePlan(planFor(p), p);
+  const sum = grocerySummary(h, { inventory: p.inventory });
+  for (const id of ['oats', 'brown_rice']) {
+    const line = sum.lines.find((l) => l.ingredientId === id);
+    if (line) assert.equal(line.packs, 0, id);
+    assert.ok(!sum.leftovers.some((l) => l.id === id), `${id} was at home, not bought`);
+  }
+});
+
+test('portions stay sensible for each meal (no 3-apple snacks)', () => {
+  for (const over of [{}, { goal: 'gain', weightKg: 95, heightCm: 190, sex: 'male' }, { goal: 'lose', weightKg: 50, heightCm: 155 }]) {
+    const p = profile({ days: 7, ...over });
+    for (const d of planFor(p).days) for (const m of d.meals) {
+      const [lo, hi] = SLOT_SERVINGS[m.slot];
+      assert.ok(m.servings >= lo && m.servings <= hi, `${m.slot} ${m.recipeId} ×${m.servings}`);
+    }
+  }
+});
+
 test('ingredients you have with a quantity only cover that quantity', () => {
   const p = profile({ days: 7 });
   const h = hydratePlan(planFor(p), p);
@@ -260,6 +281,19 @@ test('swapping a meal that fed leftovers keeps those later meals cooked', () => 
   assert.equal(later.leftoverOf, undefined);
   const laterCook = hydratePlan(next, p).days[dep.day].meals.find((m) => m.slot === dep.slot);
   assert.ok(laterCook.cookItems.length > 0, 'its ingredients are now bought for that day');
+});
+
+test('a former leftover that no longer fits its slot is flagged', () => {
+  // Tuesday lunch: 10 minutes, packed, with a microwave at work: a reheated leftover fits, cooking fresh doesn't.
+  const p = profile({ days: 7, routine: { 1: { meals: { lunch: { minutes: 10, where: 'carry', fridge: true, microwave: true } } } } });
+  const plan = planFor(p);
+  const plan2 = structuredClone(plan);
+  const mon = plan2.days[0].meals.find((m) => m.slot === 'dinner');
+  Object.assign(mon, { recipeId: 'turkey-chili', servings: 1, kind: 'cook', packFor: [{ day: 1, slot: 'lunch', servings: 1 }] });
+  plan2.days[1].meals = plan2.days[1].meals.map((m) => (m.slot === 'lunch' ? { slot: 'lunch', recipeId: 'turkey-chili', servings: 1, kind: 'leftover', leftoverOf: { day: 0, slot: 'dinner' } } : m));
+  assert.deepEqual(hydratePlan(plan2, p).days[1].meals.find((m) => m.slot === 'lunch').conflicts, []);
+  const swapped = applyMealChange(plan2, 0, 'dinner', { slot: 'dinner', recipeId: 'lentil-soup', servings: 1, kind: 'cook' });
+  assert.deepEqual(hydratePlan(swapped, p).days[1].meals.find((m) => m.slot === 'lunch').conflicts, ['time']);
 });
 
 // ---------- validation gate ----------

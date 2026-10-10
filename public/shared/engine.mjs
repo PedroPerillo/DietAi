@@ -18,7 +18,13 @@ const MAX_USES_PER_WEEK = 3; // the same dish (cooked or as leftovers) at most 3
 
 const round1 = (n) => Math.round(n * 10) / 10;
 const money = (n) => Math.round(n * 100) / 100;
-const clampServings = (s) => Math.min(MAX_SERVINGS, Math.max(MIN_SERVINGS, Math.round(s / SERVING_STEP) * SERVING_STEP));
+// Sensible portion range per meal, so calories don't pile onto one meal (no 3-apple snacks,
+// no half-portion breakfasts). Always within MIN_SERVINGS..MAX_SERVINGS.
+export const SLOT_SERVINGS = { breakfast: [0.75, 2.5], lunch: [0.75, MAX_SERVINGS], dinner: [0.75, MAX_SERVINGS], snack: [MIN_SERVINGS, 1.5] };
+const clampServings = (s, slot) => {
+  const [lo, hi] = SLOT_SERVINGS[slot] ?? [MIN_SERVINGS, MAX_SERVINGS];
+  return Math.min(hi, Math.max(lo, Math.round(s / SERVING_STEP) * SERVING_STEP));
+};
 const unitPrice = (id) => INGREDIENTS[id].price / INGREDIENTS[id].pack;
 
 // ================= dates =================
@@ -135,8 +141,8 @@ const perServing = (recipe) => ({ kcal: recipe.kcal, protein: recipe.protein, ca
 
 // Choose servings for each meal (on the 0.25 grid) to minimize the day's macro error.
 // `fixed` meals keep their servings; returns servings array.
-export function fitServings(recipes, targets, { fixed = [], start } = {}) {
-  const s = recipes.map((r, i) => start?.[i] ?? 1);
+export function fitServings(recipes, targets, { fixed = [], start, slots = [] } = {}) {
+  const s = recipes.map((r, i) => (fixed[i] ? start?.[i] ?? 1 : clampServings(start?.[i] ?? 1, slots[i])));
   const total = () => recipes.reduce((acc, r, i) => addNut(acc, scale(perServing(r), s[i])), ZERO);
   const err = () => dayError(total(), targets);
   let best = err();
@@ -146,7 +152,7 @@ export function fitServings(recipes, targets, { fixed = [], start } = {}) {
       if (fixed[i]) continue;
       for (const d of [SERVING_STEP, -SERVING_STEP, 2 * SERVING_STEP, -2 * SERVING_STEP]) {
         const old = s[i];
-        const next = clampServings(old + d);
+        const next = clampServings(old + d, slots[i]);
         if (next === old) continue;
         s[i] = next;
         const e = err();
@@ -205,7 +211,8 @@ export function planWeek(profile, targets, { costWeight = 0, pinned = {}, avoid 
     const date = addDays(startDate, d);
     const ctx = dayContext(prefs, date);
     const slots = SLOTS.filter((s) => ctx.slots[s].include);
-    const buildOptions = (relaxVariety) => slots.map((slot) => {
+    // relax: 0 = every rule, 1 = drop the budget shortlist, 2 = also allow more than 3 uses a week.
+    const buildOptions = (relax) => slots.map((slot) => {
       const key = `${d}:${slot}`;
       if (pinned[key]) {
         // Pinned recipe (a favorite, or the AI's pick). Servings stay fixed only if given.
@@ -219,22 +226,16 @@ export function planWeek(profile, targets, { costWeight = 0, pinned = {}, avoid 
         const { hard, soft, minutes } = contextIssues(r, sc, prefs);
         const items = portionIngredients(r, 1);
         const inv = items.filter((it) => invQty(it.id) > 0 || (committed[it.id] ?? 0) % INGREDIENTS[it.id].pack > 0).length / items.length;
-        if ((used[r.id] ?? 0) >= MAX_USES_PER_WEEK && !relaxVariety) hard.push('variety');
+        if ((used[r.id] ?? 0) >= MAX_USES_PER_WEEK && relax < 2) hard.push('variety');
         // Under budget pressure, stick to the cheapest recipes per calorie (more reuse).
-        if (costWeight >= 5 && cheapRank.get(r.id) > cheapCut[slot]) hard.push('variety');
-        let score = 0;
-        score += (used[r.id] ?? 0) * 1.2 + (out[d - 1]?.meals.some((m) => m.recipeId === r.id) ? 0.8 : 0);
-        score -= inv * 0.5;
-        const noCost = score + (soft.includes('skill') ? 0.4 : 0) + (soft.includes('ice-pack') ? 0.5 : 0)
+        if (costWeight >= 5 && relax < 1 && cheapRank.get(r.id) > cheapCut[slot]) hard.push('cheap');
+        // Preference score (variety, inventory reuse, skill, style, busy days); the cost term
+        // is added only for shortlist ranking, since searchCombos prices the whole day itself.
+        const noCost = (used[r.id] ?? 0) * 1.2 + (out[d - 1]?.meals.some((m) => m.recipeId === r.id) ? 0.8 : 0) - inv * 0.5
+          + (soft.includes('skill') ? 0.4 : 0) + (soft.includes('ice-pack') ? 0.5 : 0)
           + (prefs.style === 'quick' ? minutes / 25 : 0) + (prefs.style === 'bought' && r.style === 'assembled' ? -0.4 : 0)
           + (prefs.style === 'homemade' && r.style === 'homemade' ? -0.3 : 0) + (ctx.busy ? minutes / 30 : 0);
-        score += costWeight * (marginalCost(items, committed, invQty) / budgetPerMeal);
-        score += soft.includes('skill') ? 0.4 : 0;
-        score += soft.includes('ice-pack') ? 0.5 : 0;
-        if (prefs.style === 'quick') score += minutes / 25;
-        if (prefs.style === 'bought' && r.style === 'assembled') score -= 0.4;
-        if (prefs.style === 'homemade' && r.style === 'homemade') score -= 0.3;
-        if (ctx.busy) score += minutes / 30;
+        const score = noCost + costWeight * (marginalCost(items, committed, invQty) / budgetPerMeal);
         scored.push({ recipe: r, kind: 'cook', score, noCostScore: noCost, hard, soft, minutes });
       }
       // Leftovers from a batch cooked within the last few days fit busy or short slots.
@@ -242,24 +243,25 @@ export function planWeek(profile, targets, { costWeight = 0, pinned = {}, avoid 
         if (d - src.day < 1 || d - src.day > Math.min(LEFTOVER_MAX_DAYS, src.recipe.batch)) continue;
         if (!src.recipe.slots.includes(slot) || src.portionsLeft <= 0) continue;
         const { hard, soft, minutes } = contextIssues(src.recipe, sc, prefs, { leftover: true });
-        if ((used[src.recipe.id] ?? 0) >= MAX_USES_PER_WEEK && !relaxVariety) hard.push('variety');
+        if ((used[src.recipe.id] ?? 0) >= MAX_USES_PER_WEEK && relax < 2) hard.push('variety');
         const lscore = (used[src.recipe.id] ?? 0) * 0.3 - (sc.minutes < src.recipe.minutes ? 0.8 : 0.2);
         scored.push({ recipe: src.recipe, kind: 'leftover', src, score: lscore, noCostScore: lscore, hard, soft, minutes });
       }
       const fits = scored.filter((c) => c.hard.length === 0);
       let list = fits;
       if (!list.length) {
-        // Nothing fits every rule: relax time first, then the rest, and say so.
-        list = scored.filter((c) => c.hard.every((h) => h === 'variety'));
-        if (!list.length) list = scored.filter((c) => c.hard.every((h) => h === 'time' || h === 'variety'));
+        // Nothing fits every rule: relax the budget shortlist first, then variety, then time,
+        // then the rest, and say so for the routine rules.
+        const only = (...ok) => scored.filter((c) => c.hard.every((h) => ok.includes(h)));
+        for (const ok of [['cheap'], ['cheap', 'variety'], ['cheap', 'variety', 'time']]) if (!list.length) list = only(...ok);
         if (!list.length) list = scored.filter((c) => !c.hard.includes('equipment'));
         if (!list.length) list = scored;
-        const relaxed = [...new Set(list[0]?.hard ?? [])].filter((h) => h !== 'variety');
+        const relaxed = [...new Set(list[0]?.hard ?? [])].filter((h) => h !== 'variety' && h !== 'cheap');
         if (relaxed.length) notes.push({ day: d, slot, type: 'relaxed', detail: relaxed });
       }
       return list.sort((a, b) => a.score - b.score).slice(0, slots.length > 3 ? 5 : 6);
     });
-    let options = buildOptions(false);
+    let options = buildOptions(0);
     if (options.some((o) => !o.length)) {
       const missing = slots.filter((_, i) => !options[i].length);
       const err = new Error(`No recipes fit your constraints for: ${missing.join(', ')}. Try relaxing an allergy or dislike.`);
@@ -269,7 +271,8 @@ export function planWeek(profile, targets, { costWeight = 0, pinned = {}, avoid 
 
     // Try every combination of the shortlists; fit portions; keep the best.
     let best = searchCombos(options);
-    if (!best) best = searchCombos((options = buildOptions(true)));
+    if (!best) best = searchCombos((options = buildOptions(1)));
+    if (!best) best = searchCombos((options = buildOptions(2)));
     if (!best) {
       const err = new Error('Not enough different recipes fit your constraints for one day. Try relaxing an allergy or dislike.');
       err.status = 422;
@@ -285,7 +288,7 @@ export function planWeek(profile, targets, { costWeight = 0, pinned = {}, avoid 
         const recipes = combo.map((c) => c.recipe);
         const fixed = combo.map((c) => Boolean(c.pinned));
         const start = combo.map((c) => c.servings ?? 1);
-        const servings = fitServings(recipes, targets, { fixed, start });
+        const servings = fitServings(recipes, targets, { fixed, start, slots });
         const portions = recipes.map((r, i) => portionIngredients(r, servings[i]));
         const n = portions.reduce((acc, items) => addNut(acc, nutritionOf(items)), ZERO);
         // Real grocery impact of the whole day at the fitted portions (whole packs, given
@@ -362,7 +365,7 @@ export function hydratePlan(plan, profile) {
     return { ...day, index: d, label: dayLabel(day.date), longLabel: dayLabel(day.date, { long: true }), context: ctx, meals, totals };
   });
   const avg = Object.fromEntries(TARGET_KEYS.map((k) => [k, Math.round(days.reduce((s, x) => s + x.totals[k], 0) / Math.max(1, days.length))]));
-  return { ...plan, days, average: avg, deviations: deviations(avg, t, plan) };
+  return { ...plan, days, average: avg, deviations: deviations(avg, t) };
 }
 
 function hydrateMeal(m, ctx, prefs) {
@@ -370,14 +373,14 @@ function hydrateMeal(m, ctx, prefs) {
   if (m.kind === 'eatout') {
     const e = m.eatout;
     const nutrition = { kcal: Math.round(e.kcal ?? 0), protein: round1(e.protein ?? 0), carbs: round1(e.carbs ?? 0), fat: round1(e.fat ?? 0) };
-    return { ...m, name: e.name, nutrition, nutritionKnown: e.kcal != null, cookItems: [], eatenItems: [], cost: money(e.cost ?? 0), minutes: 0, context: sc, tags: [] };
+    return { ...m, name: e.name, nutrition, nutritionKnown: e.kcal != null, cookItems: [], eatenItems: [], cost: money(e.cost ?? 0), minutes: 0, context: sc, conflicts: [], tags: [] };
   }
   const recipe = getRecipe(m.recipeId);
   const eatenItems = portionIngredients(recipe, m.servings);
   const extra = (m.packFor ?? []).reduce((s, p) => s + p.servings, 0);
   // Leftover meals were cooked earlier; their ingredients are bought with the cook meal.
   const cookItems = m.kind === 'leftover' ? [] : portionIngredients(recipe, m.servings + extra);
-  const { minutes } = contextIssues(recipe, sc, prefs, { leftover: m.kind === 'leftover' });
+  const { minutes, hard } = contextIssues(recipe, sc, prefs, { leftover: m.kind === 'leftover' });
   return {
     ...m,
     name: recipe.name,
@@ -389,6 +392,9 @@ function hydrateMeal(m, ctx, prefs) {
     cost: consumedCost(eatenItems),
     minutes,
     context: sc,
+    // Rules this meal breaks for its slot (e.g. it was a leftover until the meal that fed it
+    // changed, and cooking it fresh takes longer than the time you have). The UI flags these.
+    conflicts: [...new Set(hard)].filter((h) => h !== 'variety'),
     tags: recipeTags(recipe),
   };
 }
@@ -475,12 +481,14 @@ export function grocerySummary(hydrated, state = {}, budget = null) {
     const boughtPacks = bought[id] ?? 0;
     const boughtQty = boughtPacks * ingr.pack;
     const missing = Math.max(0, qty - haveQty - boughtQty);
-    const packs = Math.ceil(missing / ingr.pack - 1e-9);
+    const packs = Math.max(0, Math.ceil(missing / ingr.pack - 1e-9));
     const status = haveAll || (haveQty >= qty && haveQty > 0) ? 'have' : boughtPacks > 0 && missing === 0 ? 'bought' : 'buy';
     toBuyTotal += packs * ingr.price;
     boughtTotal += boughtPacks * ingr.price;
-    const supply = (haveAll ? 0 : haveQty) + boughtQty + packs * ingr.pack;
-    const left = haveAll ? null : +(supply - qty).toFixed(2);
+    // Left for next week = what you paid for this week minus what the plan eats of it. Food
+    // that was already at home isn't counted: it wasn't part of this week's spending.
+    const purchased = boughtQty + packs * ingr.pack;
+    const left = haveAll || !purchased ? null : +(purchased - Math.max(0, qty - haveQty)).toFixed(2);
     if (left > 0.001) leftovers.push({ id, name: ingr.name, qty: left, unit: ingr.unit, value: money(left * unitPrice(id)) });
     lines.push({
       ingredientId: id, name: ingr.name, category: ingr.category, unit: ingr.unit, need: qty, have: haveAll ? null : haveQty,
@@ -581,7 +589,8 @@ export function alternativesFor(plan, profile, state, dayIdx, slot, reason, { in
     // Portion that best completes the day given the other meals.
     let bestS = 1;
     let bestE = Infinity;
-    for (let s = MIN_SERVINGS; s <= MAX_SERVINGS; s += SERVING_STEP) {
+    const [lo, hi] = SLOT_SERVINGS[slot] ?? [MIN_SERVINGS, MAX_SERVINGS];
+    for (let s = lo; s <= hi; s += SERVING_STEP) {
       const n = addNut(otherNut, nutritionOf(portionIngredients(recipe, s)));
       const e = dayError(n, plan.targets);
       if (e < bestE) { bestE = e; bestS = s; }
